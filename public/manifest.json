@@ -1,0 +1,11 @@
+{
+  "short_name": "Balance",
+  "name": "Balance — Finanças Pessoais",
+  "icons": [
+    { "src": "icon.png", "sizes": "192x192", "type": "image/png" }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#020817",
+  "background_color": "#020817"
+}
