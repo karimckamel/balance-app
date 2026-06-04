@@ -301,6 +301,8 @@ export default function App() {
     setTotp2FAStep("done");
     showToast("2FA ativado com sucesso! 🔐");
   };
+
+  const handleLogout = async () => {
     await supabase.auth.signOut();
     setTransactions([]); setInvestments([]); setBudgets([]);
   };
