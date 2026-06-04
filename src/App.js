@@ -139,8 +139,9 @@ export default function App() {
   const [totp2FACode,  setTotp2FACode]  = useState("");
   const [totp2FAQr,    setTotp2FAQr]    = useState("");
   const [totp2FAId,    setTotp2FAId]    = useState("");
-  const [totp2FAStep,  setTotp2FAStep]  = useState("qr"); // qr | done
-  const [budgetScope,   setBudgetScope]   = useState("month");
+  const [totp2FAStep,  setTotp2FAStep]  = useState("qr");
+  const [budgetEdits,  setBudgetEdits]  = useState({});
+  const [budgetScope,  setBudgetScope]  = useState("month");
   const [editingTx,     setEditingTx]     = useState(null); // {id, amount, description}
   const [editAmount,    setEditAmount]    = useState("");
   const [editDesc,      setEditDesc]      = useState("");
