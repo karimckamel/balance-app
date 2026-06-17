@@ -592,6 +592,9 @@ export default function App() {
         <label style={S.label}>Valor (R$)</label>
         <input style={S.input} type="text" inputMode="decimal" placeholder="0,00" value={amount} onChange={e=>setAmount(e.target.value)} autoComplete="off"/>
       </div>
+      <button style={{...S.saveBtn,opacity:syncing?0.6:1,marginBottom:16,marginTop:4}} onClick={addTransaction} disabled={syncing}>
+        {syncing?"Salvando...":"Salvar Lançamento"}
+      </button>
       <div style={S.field}>
         <label style={S.label}>Categoria</label>
         <div style={S.catGrid}>
@@ -611,9 +614,6 @@ export default function App() {
         <label style={S.label}>Data</label>
         <input style={S.input} type="date" value={date} onChange={e=>setDate(e.target.value)}/>
       </div>
-      <button style={{...S.saveBtn,opacity:syncing?0.6:1}} onClick={addTransaction} disabled={syncing}>
-        {syncing?"Salvando...":"Salvar Lançamento"}
-      </button>
     </div>
   );
 
@@ -755,14 +755,9 @@ export default function App() {
           <div style={{...aStyles.kpiValue,color:"#f87171"}}>{mask(fmtK(dashTotalDespesa))}</div>
           {dashViewMode==="year"&&<div style={aStyles.kpiSub}>Média: {mask(fmtK(avgDespesa))}/mês</div>}
         </div>
-        <div style={{...aStyles.kpi,borderColor:dashSaldo>=0?"#1e3a5f":"#7f1d1d"}}>
+        <div style={{...aStyles.kpi,borderColor:dashSaldo>=0?"#1e3a5f":"#7f1d1d",gridColumn:"1 / -1"}}>
           <div style={aStyles.kpiLabel}>Saldo</div>
           <div style={{...aStyles.kpiValue,color:dashSaldo>=0?"#60a5fa":"#f87171"}}>{mask(fmtK(dashSaldo))}</div>
-        </div>
-        <div style={{...aStyles.kpi,borderColor:"#4c1d95"}}>
-          <div style={aStyles.kpiLabel}>Taxa de Poupança</div>
-          <div style={{...aStyles.kpiValue,color:"#a78bfa"}}>{dashTotalReceita>0?`${savingsRate.toFixed(1)}%`:"—"}</div>
-          <div style={aStyles.kpiSub}>{savingsRate>=20?"✓ Meta atingida":"Meta: 20%"}</div>
         </div>
       </div>
 
@@ -799,8 +794,8 @@ export default function App() {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#0f172a" vertical={false}/>
-                <XAxis dataKey="name" tick={{fill:"#475569",fontSize:11}} axisLine={false} tickLine={false}/>
-                <YAxis tickFormatter={v=>fmtK(v)} tick={{fill:"#475569",fontSize:10}} axisLine={false} tickLine={false} width={52}/>
+                <XAxis dataKey="name" tick={{fill:"#64748b",fontSize:11}} axisLine={false} tickLine={false}/>
+                <YAxis tickFormatter={v=>fmtK(v)} tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false} width={52}/>
                 <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:12}} formatter={v=>hidden?"••••••":fmt(v)}/>
                 <Area type="monotone" dataKey="Receita" stroke="#4ade80" strokeWidth={2} fill="url(#gr1)"/>
                 <Area type="monotone" dataKey="Despesa" stroke="#f87171" strokeWidth={2} fill="url(#gr2)"/>
@@ -808,32 +803,148 @@ export default function App() {
             </ResponsiveContainer>
           </div>
         )}
-        {pieData.length>0&&(
-          <div style={{...aStyles.card,flex:1,minWidth:240}}>
-            <div style={aStyles.cardTitle}>Despesas por Categoria</div>
+        {dashViewMode==="year"&&(
+          <div style={{...aStyles.card,flex:1,minWidth:220}}>
+            <div style={aStyles.cardTitle}>Saldo Mês a Mês</div>
             <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} dataKey="value" paddingAngle={2}>
-                  {pieData.map((_,i)=><Cell key={i} fill={PALETTE[i%PALETTE.length]}/>)}
-                </Pie>
+              <BarChart data={yearlyData} barSize={14}>
+                <XAxis dataKey="name" tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false}/>
+                <YAxis tickFormatter={v=>fmtK(v)} tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false} width={48}/>
                 <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
-                <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:10,color:"#94a3b8"}}/>
-              </PieChart>
+                <Bar dataKey="Saldo" radius={[4,4,0,0]}>
+                  {yearlyData.map((m,i)=><Cell key={i} fill={m.Saldo>=0?"#4ade80":"#f87171"}/>)}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
           </div>
         )}
       </div>
 
-      {/* Gráficos linha 2 */}
+      {/* Investimentos — evolução e deltas */}
+      {(()=>{
+        const invEvolution = MONTHS.map((m,i)=>{
+          const snap = getInvestMonth(i,selectedYear);
+          const total = INV_BANKS.reduce((s,b)=>s+(snap[b.id]||0),0);
+          const prevSnap = getInvestMonth(i-1,selectedYear);
+          const prevTotal = INV_BANKS.reduce((s,b)=>s+(prevSnap[b.id]||0),0);
+          return {
+            name:m,
+            Total:total,
+            Itaú: snap.itau||0,
+            XP: snap.xp||0,
+            Bradesco: snap.bradesco||0,
+            delta: i>0&&prevTotal>0 ? total-prevTotal : null,
+          };
+        }).filter(m=>m.Total>0);
+        if(invEvolution.length===0) return null;
+        const lastSnap = invEvolution[invEvolution.length-1];
+        const firstSnap = invEvolution[0];
+        const totalGrowth = lastSnap.Total - firstSnap.Total;
+        const bestMonth = [...invEvolution].filter(m=>m.delta!==null).sort((a,b)=>b.delta-a.delta)[0];
+        const worstMonth = [...invEvolution].filter(m=>m.delta!==null).sort((a,b)=>a.delta-b.delta)[0];
+        return (
+          <>
+            {/* Invest chart */}
+            <div style={{...aStyles.card,marginBottom:14}}>
+              <div style={aStyles.cardTitle}>💎 Evolução dos Investimentos {selectedYear}</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={invEvolution} margin={{top:4,right:4,left:0,bottom:0}}>
+                  <defs>
+                    <linearGradient id="grinv" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#a855f7" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#0f172a" vertical={false}/>
+                  <XAxis dataKey="name" tick={{fill:"#64748b",fontSize:11}} axisLine={false} tickLine={false}/>
+                  <YAxis tickFormatter={v=>fmtK(v)} tick={{fill:"#64748b",fontSize:10}} axisLine={false} tickLine={false} width={52}/>
+                  <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:12}} formatter={v=>hidden?"••••••":fmt(v)}/>
+                  <Area type="monotone" dataKey="Total" stroke="#a855f7" strokeWidth={2} fill="url(#grinv)"/>
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Invest deltas table */}
+            <div style={{...aStyles.card,marginBottom:14}}>
+              <div style={aStyles.cardTitle}>💎 Variação Mensal por Banco</div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead>
+                    <tr>
+                      {["Mês","Itaú","XP","Bradesco","Total","Δ Mês"].map(h=>(
+                        <th key={h} style={{textAlign:"right",padding:"6px 8px",color:"#e2e8f0",fontWeight:700,fontSize:11,borderBottom:"1px solid #0f172a",whiteSpace:"nowrap"}}>
+                          {h==="Mês"?<span style={{textAlign:"left",display:"block"}}>{h}</span>:h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invEvolution.map((m,i)=>(
+                      <tr key={i} style={{borderBottom:"1px solid #0a1628"}}>
+                        <td style={{padding:"7px 8px",color:"#94a3b8",fontWeight:600}}>{m.name}</td>
+                        <td style={{padding:"7px 8px",color:"#f97316",textAlign:"right",fontWeight:600}}>{m.Itaú>0?mask(fmtK(m.Itaú)):"—"}</td>
+                        <td style={{padding:"7px 8px",color:"#a3a3a3",textAlign:"right",fontWeight:600}}>{m.XP>0?mask(fmtK(m.XP)):"—"}</td>
+                        <td style={{padding:"7px 8px",color:"#ef4444",textAlign:"right",fontWeight:600}}>{m.Bradesco>0?mask(fmtK(m.Bradesco)):"—"}</td>
+                        <td style={{padding:"7px 8px",color:"#a855f7",textAlign:"right",fontWeight:800}}>{mask(fmtK(m.Total))}</td>
+                        <td style={{padding:"7px 8px",textAlign:"right",fontWeight:700,color:m.delta===null?"#334155":m.delta>=0?"#4ade80":"#f87171"}}>
+                          {m.delta===null?"—":`${m.delta>=0?"+":""}${mask(fmtK(m.delta))}`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Invest insights */}
+            <div style={{...aStyles.card,marginBottom:14}}>
+              <div style={aStyles.cardTitle}>💡 Insights — Investimentos</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+                <div style={{...aStyles.insightCard,borderColor:"#a855f744"}}>
+                  <span style={{fontSize:18}}>💰</span>
+                  <span style={{fontSize:12,fontWeight:600,lineHeight:1.5,color:"#e9d5ff"}}>
+                    Patrimônio atual: {mask(fmt(lastSnap.Total))}
+                  </span>
+                </div>
+                {invEvolution.length>1&&(
+                  <div style={{...aStyles.insightCard,borderColor:(totalGrowth>=0?"#4ade80":"#f87171")+"44"}}>
+                    <span style={{fontSize:18}}>{totalGrowth>=0?"📈":"📉"}</span>
+                    <span style={{fontSize:12,fontWeight:600,lineHeight:1.5,color:totalGrowth>=0?"#4ade80":"#f87171"}}>
+                      Crescimento no ano: {totalGrowth>=0?"+":""}{mask(fmt(totalGrowth))} ({firstSnap.Total>0?((totalGrowth/firstSnap.Total)*100).toFixed(1):0}%)
+                    </span>
+                  </div>
+                )}
+                {bestMonth&&(
+                  <div style={{...aStyles.insightCard,borderColor:"#4ade8044"}}>
+                    <span style={{fontSize:18}}>🏆</span>
+                    <span style={{fontSize:12,fontWeight:600,lineHeight:1.5,color:"#4ade80"}}>
+                      Melhor mês: {bestMonth.name} (+{mask(fmt(bestMonth.delta))})
+                    </span>
+                  </div>
+                )}
+                {worstMonth&&worstMonth.delta<0&&(
+                  <div style={{...aStyles.insightCard,borderColor:"#f8717144"}}>
+                    <span style={{fontSize:18}}>⚠️</span>
+                    <span style={{fontSize:12,fontWeight:600,lineHeight:1.5,color:"#f87171"}}>
+                      Queda em {worstMonth.name}: {mask(fmt(worstMonth.delta))}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* Gráficos linha 2 — Budget */}
       <div style={aStyles.chartsRow}>
-        {/* Budget analysis */}
-        <div style={{...aStyles.card,flex:1.5}}>
+        <div style={{...aStyles.card,flex:1}}>
           <div style={aStyles.cardTitle}>Orçamento × Realizado — Despesas</div>
           <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
             {dashBudgetAnalysis.map(r=>(
               <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                  <span style={{fontSize:12,fontWeight:600,color:"#cbd5e1"}}>{r.label}</span>
+                  <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.label}</span>
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
                     <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmtK(r.spent))}</span>
                     <span style={{fontSize:11,color:"#334155"}}>/</span>
@@ -852,36 +963,6 @@ export default function App() {
             ))}
           </div>
         </div>
-
-        {/* Top 5 + saldo mensal */}
-        <div style={{...aStyles.card,flex:1,minWidth:220,display:"flex",flexDirection:"column",gap:16}}>
-          <div>
-            <div style={aStyles.cardTitle}>Top 5 Despesas</div>
-            <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={topExpenses} layout="vertical" margin={{left:0,right:8}}>
-                <XAxis type="number" hide/>
-                <YAxis type="category" dataKey="label" tick={{fill:"#94a3b8",fontSize:10}} width={110} axisLine={false} tickLine={false}/>
-                <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
-                <Bar dataKey="spent" fill="#f472b6" radius={[0,4,4,0]} barSize={10}/>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          {dashViewMode==="year"&&(
-            <div>
-              <div style={aStyles.cardTitle}>Saldo Mês a Mês</div>
-              <ResponsiveContainer width="100%" height={110}>
-                <BarChart data={yearlyData} barSize={10}>
-                  <XAxis dataKey="name" tick={{fill:"#475569",fontSize:9}} axisLine={false} tickLine={false}/>
-                  <YAxis hide/>
-                  <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
-                  <Bar dataKey="Saldo" radius={[3,3,0,0]}>
-                    {yearlyData.map((m,i)=><Cell key={i} fill={m.Saldo>=0?"#4ade80":"#f87171"}/>)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Insights */}
@@ -890,13 +971,12 @@ export default function App() {
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
           {(()=>{
             const insights=[];
-            if (savingsRate>=20) insights.push({icon:"🏆",text:`Taxa de poupança de ${savingsRate.toFixed(1)}% — acima dos 20% recomendados.`,color:"#4ade80"});
-            else if (savingsRate>0) insights.push({icon:"📊",text:`Taxa de poupança de ${savingsRate.toFixed(1)}%. Meta recomendada: 20%.`,color:"#fbbf24"});
-            else if (savingsRate<0) insights.push({icon:"🚨",text:`Despesas superiores às receitas em ${mask(fmt(Math.abs(dashSaldo)))}.`,color:"#f87171"});
+            if (dashSaldo>=0) insights.push({icon:"✅",text:`Saldo ${dashViewMode==="month"?`de ${MONTHS_FULL[dashMonth]}`:"do ano"}: ${mask(fmt(dashSaldo))}.`,color:"#4ade80"});
+            else insights.push({icon:"🚨",text:`Despesas superiores às receitas em ${mask(fmt(Math.abs(dashSaldo)))}.`,color:"#f87171"});
             const worstCat=dashBudgetAnalysis.find(r=>r.over);
             if(worstCat) insights.push({icon:"⚠️",text:`${worstCat.label} é a mais estourada: ${worstCat.pct.toFixed(0)}% do orçamento usado.`,color:"#f87171"});
-            const biggestExp=topExpenses[0];
-            if(biggestExp) insights.push({icon:"💸",text:`${biggestExp.label} é sua maior despesa: ${mask(fmt(biggestExp.spent))}.`,color:"#f472b6"});
+            const mostSpent=dashBudgetAnalysis[0];
+            if(mostSpent) insights.push({icon:"💸",text:`${mostSpent.label} é sua maior despesa: ${mask(fmt(mostSpent.spent))}.`,color:"#f472b6"});
             if(dashViewMode==="year"){
               const best=[...yearlyData].sort((a,b)=>b.Saldo-a.Saldo)[0];
               const worst=[...yearlyData].sort((a,b)=>a.Saldo-b.Saldo)[0];
@@ -1038,15 +1118,15 @@ const aStyles = {
   select:     {background:"#0a1628",border:"1px solid #1e293b",color:"#e2e8f0",borderRadius:8,padding:"6px 12px",fontSize:13,fontWeight:600,cursor:"pointer",outline:"none"},
   kpiRow:     {display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16},
   kpi:        {background:"#04091a",border:"1px solid",borderRadius:12,padding:"14px 16px"},
-  kpiLabel:   {fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
+  kpiLabel:   {fontSize:10,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
   kpiValue:   {fontSize:22,fontWeight:800,marginBottom:2},
-  kpiSub:     {fontSize:10,color:"#334155"},
+  kpiSub:     {fontSize:10,color:"#64748b"},
   alertBox:   {background:"#1c0a0a",border:"1px solid #7f1d1d",borderRadius:10,padding:"12px 14px",marginBottom:14},
   alertTitle: {fontSize:11,fontWeight:700,color:"#f87171",marginBottom:8,textTransform:"uppercase",letterSpacing:0.8},
   alertChip:  {background:"#0f172a",border:"1px solid #7f1d1d",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,display:"flex",gap:6,alignItems:"center"},
   chartsRow:  {display:"flex",gap:12,flexWrap:"wrap",marginBottom:14},
   card:       {background:"#04091a",border:"1px solid #0f172a",borderRadius:14,padding:"16px",marginBottom:0,flex:1,minWidth:200},
-  cardTitle:  {fontSize:11,fontWeight:700,color:"#60a5fa",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
+  cardTitle:  {fontSize:11,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
   insightCard:{background:"#0a1628",border:"1px solid",borderRadius:10,padding:"12px",display:"flex",gap:8,alignItems:"flex-start"},
 };
 
