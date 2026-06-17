@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
 import Auth from "./Auth";
@@ -29,21 +29,10 @@ const CATEGORIES = {
 };
 
 const DEFAULT_BUDGETS = {
-  salario:       17000,
-  imoveis:       4567.38,
-  investimentos: 7195.28,
-  outros_r:      5000,
-  moradia:       5660,
-  alimentacao:   1400,
-  transporte:    650,
-  saude:         153.79,
-  educacao:      0,
-  compras:       1200,
-  nina:          3822,
-  viagens:       2000,
-  empregada:     3782.44,
-  corpo:         385,
-  outros_d:      287.5,
+  salario:17000, imoveis:4567.38, investimentos:7195.28, outros_r:5000,
+  moradia:5660, alimentacao:1400, transporte:650, saude:153.79,
+  educacao:0, compras:1200, nina:3822, viagens:2000,
+  empregada:3782.44, corpo:385, outros_d:287.5,
 };
 
 const INV_BANKS = [
@@ -54,9 +43,13 @@ const INV_BANKS = [
 
 const MONTHS      = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 const MONTHS_FULL = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const RECEITA_CATS = ["salario","imoveis","investimentos","outros_r"];
+const DESPESA_CATS = ["moradia","alimentacao","transporte","saude","educacao","compras","nina","viagens","empregada","corpo","outros_d"];
+const PALETTE = ["#60a5fa","#a78bfa","#34d399","#f472b6","#fbbf24","#f87171","#38bdf8","#c084fc","#4ade80","#fb923c","#e879f9"];
 
 const ALL_CATS = [...CATEGORIES.receita, ...CATEGORIES.despesa];
 const fmt      = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const fmtK     = (v) => v >= 1000 ? `R$${(v/1000).toFixed(1)}k` : fmt(v);
 const fmtNum   = (v) => Number(v.toFixed(2));
 const getCat   = (id) => ALL_CATS.find(c => c.id === id);
 const getCatLabel = (id) => { const c = getCat(id); return c ? `${c.icon} ${c.label}` : id; };
@@ -65,7 +58,6 @@ const getCatLabel = (id) => { const c = getCat(id); return c ? `${c.icon} ${c.la
 
 function exportToExcel(transactions, investments, budgets, year) {
   const wb = XLSX.utils.book_new();
-
   const txRows = transactions
     .filter(t => new Date(t.date+"T12:00:00").getFullYear()===year)
     .sort((a,b) => a.date.localeCompare(b.date))
@@ -73,7 +65,6 @@ function exportToExcel(transactions, investments, budgets, year) {
   const ws1 = XLSX.utils.json_to_sheet(txRows);
   ws1["!cols"] = [{wch:12},{wch:10},{wch:20},{wch:28},{wch:14}];
   XLSX.utils.book_append_sheet(wb, ws1, "Lançamentos");
-
   const summaryRows = MONTHS.map((m,i) => {
     const txs = transactions.filter(t => { const d=new Date(t.date+"T12:00:00"); return d.getMonth()===i && d.getFullYear()===year; });
     const r = txs.filter(t=>t.type==="receita").reduce((s,t)=>s+t.amount,0);
@@ -85,7 +76,6 @@ function exportToExcel(transactions, investments, budgets, year) {
   const ws2 = XLSX.utils.json_to_sheet(summaryRows);
   ws2["!cols"] = [{wch:14},{wch:16},{wch:16},{wch:16}];
   XLSX.utils.book_append_sheet(wb, ws2, "Resumo Mensal");
-
   const invRows = MONTHS.map((m,i) => {
     const snap = investments.find(inv=>inv.year===year&&inv.month===i)||{};
     const it=snap.itau||0,xp=snap.xp||0,br=snap.bradesco||0;
@@ -96,14 +86,12 @@ function exportToExcel(transactions, investments, budgets, year) {
     ws3["!cols"] = [{wch:14},{wch:14},{wch:14},{wch:14},{wch:14}];
     XLSX.utils.book_append_sheet(wb, ws3, "Investimentos");
   }
-
   XLSX.writeFile(wb, `Balance_${year}.xlsx`);
 }
 
 // ─── Budget helpers ───────────────────────────────────────────────────────────
 
 function getBudgetAmount(budgets, categoryId, year, month) {
-  // Priority: month-specific > base (month=null) > default
   const monthly = budgets.find(b => b.category===categoryId && b.year===year && b.month===month);
   if (monthly) return monthly.amount;
   const base = budgets.find(b => b.category===categoryId && b.year===year && b.month===null);
@@ -134,7 +122,6 @@ export default function App() {
   const [isDesktop,     setIsDesktop]     = useState(window.innerWidth>=768);
   const [syncing,       setSyncing]       = useState(false);
 
-  // Budget editing state
   const [show2FA,      setShow2FA]      = useState(false);
   const [totp2FACode,  setTotp2FACode]  = useState("");
   const [totp2FAQr,    setTotp2FAQr]    = useState("");
@@ -142,9 +129,13 @@ export default function App() {
   const [totp2FAStep,  setTotp2FAStep]  = useState("qr");
   const [budgetEdits,  setBudgetEdits]  = useState({});
   const [budgetScope,  setBudgetScope]  = useState("month");
-  const [editingTx,     setEditingTx]     = useState(null); // {id, amount, description}
-  const [editAmount,    setEditAmount]    = useState("");
-  const [editDesc,      setEditDesc]      = useState("");
+  const [editingTx,    setEditingTx]    = useState(null);
+  const [editAmount,   setEditAmount]   = useState("");
+  const [editDesc,     setEditDesc]     = useState("");
+
+  // Dashboard analítico
+  const [dashViewMode, setDashViewMode] = useState("year");
+  const [dashMonth,    setDashMonth]    = useState(new Date().getMonth());
 
   useEffect(() => {
     supabase.auth.getSession().then(({data:{session}}) => setSession(session));
@@ -220,7 +211,7 @@ export default function App() {
       .select().single();
     setSyncing(false);
     if (error) return showToast("Erro ao editar",false);
-    setTransactions(prev=>prev.map(t=>t.id===editingTx.id?data:t));
+    setTransactions(prev=>prev.map(t=>t.id===editingTx.id?{...t,amount:val,description:editDesc}:t));
     setEditingTx(null);
     showToast("Lançamento atualizado ☁️");
   };
@@ -269,7 +260,6 @@ export default function App() {
   };
 
   const openBudget = () => {
-    // Pre-fill inputs with current values
     const edits = {};
     ALL_CATS.forEach(c => {
       const val = getBudgetAmount(budgets, c.id, selectedYear, selectedMonth);
@@ -331,12 +321,6 @@ export default function App() {
   const totalDespesa = monthlyTx.filter(t=>t.type==="despesa").reduce((s,t)=>s+t.amount,0);
   const saldo        = totalReceita-totalDespesa;
 
-  const byCategory = useMemo(()=>{
-    const map={};
-    monthlyTx.forEach(t=>{ if(!map[t.category]) map[t.category]={receita:0,despesa:0}; map[t.category][t.type]+=t.amount; });
-    return map;
-  },[monthlyTx]);
-
   const yearlyData = useMemo(()=>
     MONTHS.map((m,i)=>{
       const txs=transactions.filter(t=>{ const d=new Date(t.date+"T12:00:00"); return d.getMonth()===i&&d.getFullYear()===selectedYear; });
@@ -347,24 +331,70 @@ export default function App() {
     MONTHS.map((m,i)=>{ const snap=getInvestMonth(i,selectedYear); return {name:m,Total:INV_BANKS.reduce((s,b)=>s+(snap[b.id]||0),0)}; }),
     [investments,selectedYear]);
 
-  // Budget rows for current month — all categories that have budget or spending
   const budgetRows = useMemo(()=>{
     const rows=[];
     ALL_CATS.forEach(cat=>{
       const budgeted = getBudgetAmount(budgets,cat.id,selectedYear,selectedMonth);
-      const spent    = byCategory[cat.id]?.[cat.type==="receita"?"receita":"despesa"] ||
-                       (byCategory[cat.id]?.receita||0)+(byCategory[cat.id]?.despesa||0);
-      // figure out real spent for this category
       const realSpent = monthlyTx.filter(t=>t.category===cat.id).reduce((s,t)=>s+t.amount,0);
       if (budgeted===0&&realSpent===0) return;
       const isReceita = CATEGORIES.receita.find(c=>c.id===cat.id);
       const pct = budgeted>0 ? Math.min((realSpent/budgeted)*100,100) : 100;
       const over = budgeted>0 && realSpent>budgeted;
-      const diff = budgeted - realSpent; // positive = remaining, negative = over
+      const diff = budgeted - realSpent;
       rows.push({ cat, budgeted, realSpent, pct, over, diff, isReceita });
     });
     return rows;
   },[budgets,monthlyTx,selectedMonth,selectedYear]);
+
+  // ─── Dashboard analítico data ──────────────────────────────────────────────
+
+  const dashFiltered = useMemo(() => {
+    return transactions.filter(t => {
+      const d = new Date(t.date+"T12:00:00");
+      if (dashViewMode==="year") return d.getFullYear()===selectedYear;
+      return d.getFullYear()===selectedYear && d.getMonth()===dashMonth;
+    });
+  }, [transactions, dashViewMode, dashMonth, selectedYear]);
+
+  const dashTotalReceita = dashFiltered.filter(t=>t.type==="receita").reduce((s,t)=>s+t.amount,0);
+  const dashTotalDespesa = dashFiltered.filter(t=>t.type==="despesa").reduce((s,t)=>s+t.amount,0);
+  const dashSaldo        = dashTotalReceita - dashTotalDespesa;
+
+  const monthsWithData   = yearlyData.filter(m=>m.Despesa>0).length||1;
+  const avgDespesa       = yearlyData.reduce((s,m)=>s+m.Despesa,0)/monthsWithData;
+  const avgReceita       = yearlyData.reduce((s,m)=>s+m.Receita,0)/(yearlyData.filter(m=>m.Receita>0).length||1);
+
+  const dashCatData = useMemo(()=>{
+    const map={};
+    dashFiltered.forEach(t=>{ if(!map[t.category]) map[t.category]={receita:0,despesa:0}; map[t.category][t.type]+=t.amount; });
+    return map;
+  },[dashFiltered]);
+
+  const dashBudgetAnalysis = useMemo(()=>{
+    return DESPESA_CATS.map(catId=>{
+      const months = dashViewMode==="month" ? [dashMonth] : Array.from({length:12},(_,i)=>i);
+      const spent = months.reduce((s,mo)=>{
+        return s+transactions.filter(t=>{
+          const d=new Date(t.date+"T12:00:00");
+          return t.category===catId&&d.getFullYear()===selectedYear&&d.getMonth()===mo&&t.type==="despesa";
+        }).reduce((ss,t)=>ss+t.amount,0);
+      },0);
+      const budgeted = months.reduce((s,mo)=>s+getBudgetAmount(budgets,catId,selectedYear,mo),0);
+      const pct = budgeted>0?(spent/budgeted)*100:0;
+      const over = spent>budgeted&&budgeted>0;
+      return { catId, label:getCatLabel(catId), spent, budgeted, pct, over, diff:budgeted-spent };
+    }).filter(r=>r.spent>0||r.budgeted>0).sort((a,b)=>b.pct-a.pct);
+  },[transactions,budgets,dashViewMode,dashMonth,selectedYear]);
+
+  const mostOverspent = dashBudgetAnalysis.filter(r=>r.over).slice(0,3);
+  const topExpenses   = [...dashBudgetAnalysis].sort((a,b)=>b.spent-a.spent).slice(0,5);
+
+  const pieData = useMemo(()=>
+    DESPESA_CATS.map(catId=>({ name:getCatLabel(catId), value:dashCatData[catId]?.despesa||0 }))
+      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value).slice(0,8),
+    [dashCatData]);
+
+  const savingsRate = dashTotalReceita>0?(dashSaldo/dashTotalReceita)*100:0;
 
   if (session===undefined) return (
     <div style={{minHeight:"100vh",background:"#020817",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -372,8 +402,6 @@ export default function App() {
     </div>
   );
   if (!session) return <Auth />;
-
-  // ─── Layout helpers ────────────────────────────────────────────────────────
 
   const S = isDesktop ? desktopStyles : mobileStyles;
 
@@ -384,15 +412,15 @@ export default function App() {
     </button>
   );
 
-  // ─── Section components ────────────────────────────────────────────────────
+  // ─── Budget bar ────────────────────────────────────────────────────────────
 
   const budgetBarJSX = (row) => {
     const {cat,budgeted,realSpent,pct,over,diff,isReceita} = row;
-    const barColor = isReceita ? (realSpent>=budgeted?"#4ade80":"#3b82f6") : (over?"#f87171":"#4ade80");
-    const diffColor = isReceita ? (diff<=0?"#4ade80":"#f87171") : (over?"#f87171":"#4ade80");
+    const barColor = isReceita?(realSpent>=budgeted?"#4ade80":"#3b82f6"):(over?"#f87171":"#4ade80");
+    const diffColor = isReceita?(diff<=0?"#4ade80":"#f87171"):(over?"#f87171":"#4ade80");
     const diffText = isReceita
-      ? (diff<=0?`✓ Meta atingida (+${mask(fmt(Math.abs(diff)))})`:`⚠️ Faltam ${mask(fmt(diff))}`)
-      : (over?`⚠️ Estourou ${mask(fmt(Math.abs(diff)))}`:`✓ Faltam ${mask(fmt(diff))}`);
+      ?(diff<=0?`✓ Meta atingida (+${mask(fmt(Math.abs(diff)))})`:`⚠️ Faltam ${mask(fmt(diff))}`)
+      :(over?`⚠️ Estourou ${mask(fmt(Math.abs(diff)))}`:`✓ Faltam ${mask(fmt(diff))}`);
     return (
       <div key={cat.id} style={bStyles.row}>
         <div style={bStyles.rowTop}>
@@ -406,8 +434,8 @@ export default function App() {
         {budgeted>0&&<div style={bStyles.barBg}><div style={{...bStyles.barFill,width:`${pct}%`,background:barColor}}/></div>}
         <div style={bStyles.diffRow}>
           {budgeted>0
-            ? <span style={{fontSize:11,fontWeight:700,color:diffColor}}>{diffText}</span>
-            : <span style={{fontSize:11,color:"#334155"}}>Sem orçamento definido</span>}
+            ?<span style={{fontSize:11,fontWeight:700,color:diffColor}}>{diffText}</span>
+            :<span style={{fontSize:11,color:"#334155"}}>Sem orçamento definido</span>}
         </div>
       </div>
     );
@@ -417,6 +445,8 @@ export default function App() {
   const totalOrcDespesa = CATEGORIES.despesa.reduce((s,c)=>s+getBudgetAmount(budgets,c.id,selectedYear,selectedMonth),0);
   const budgetRowsReceita = budgetRows.filter(r=>r.isReceita);
   const budgetRowsDespesa = budgetRows.filter(r=>!r.isReceita);
+
+  // ─── Views ─────────────────────────────────────────────────────────────────
 
   const dashboardJSX = (
     <>
@@ -696,6 +726,196 @@ export default function App() {
     </div>
   );
 
+  // ─── Dashboard analítico view ──────────────────────────────────────────────
+
+  const analyticsJSX = (
+    <div style={{paddingBottom:20}}>
+      {/* Filtros */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={aStyles.toggle}>
+          <button style={{...aStyles.toggleBtn,...(dashViewMode==="year"?aStyles.toggleActive:{})}} onClick={()=>setDashViewMode("year")}>Ano {selectedYear}</button>
+          <button style={{...aStyles.toggleBtn,...(dashViewMode==="month"?aStyles.toggleActive:{})}} onClick={()=>setDashViewMode("month")}>Mês</button>
+        </div>
+        {dashViewMode==="month"&&(
+          <select style={aStyles.select} value={dashMonth} onChange={e=>setDashMonth(Number(e.target.value))}>
+            {MONTHS_FULL.map((m,i)=><option key={i} value={i}>{m}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* KPIs */}
+      <div style={aStyles.kpiRow}>
+        <div style={{...aStyles.kpi,borderColor:"#166534"}}>
+          <div style={aStyles.kpiLabel}>Receita Total</div>
+          <div style={{...aStyles.kpiValue,color:"#4ade80"}}>{mask(fmtK(dashTotalReceita))}</div>
+          {dashViewMode==="year"&&<div style={aStyles.kpiSub}>Média: {mask(fmtK(avgReceita))}/mês</div>}
+        </div>
+        <div style={{...aStyles.kpi,borderColor:"#7f1d1d"}}>
+          <div style={aStyles.kpiLabel}>Despesa Total</div>
+          <div style={{...aStyles.kpiValue,color:"#f87171"}}>{mask(fmtK(dashTotalDespesa))}</div>
+          {dashViewMode==="year"&&<div style={aStyles.kpiSub}>Média: {mask(fmtK(avgDespesa))}/mês</div>}
+        </div>
+        <div style={{...aStyles.kpi,borderColor:dashSaldo>=0?"#1e3a5f":"#7f1d1d"}}>
+          <div style={aStyles.kpiLabel}>Saldo</div>
+          <div style={{...aStyles.kpiValue,color:dashSaldo>=0?"#60a5fa":"#f87171"}}>{mask(fmtK(dashSaldo))}</div>
+        </div>
+        <div style={{...aStyles.kpi,borderColor:"#4c1d95"}}>
+          <div style={aStyles.kpiLabel}>Taxa de Poupança</div>
+          <div style={{...aStyles.kpiValue,color:"#a78bfa"}}>{dashTotalReceita>0?`${savingsRate.toFixed(1)}%`:"—"}</div>
+          <div style={aStyles.kpiSub}>{savingsRate>=20?"✓ Meta atingida":"Meta: 20%"}</div>
+        </div>
+      </div>
+
+      {/* Alertas */}
+      {mostOverspent.length>0&&(
+        <div style={aStyles.alertBox}>
+          <div style={aStyles.alertTitle}>⚠️ Orçamentos estourados</div>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            {mostOverspent.map(r=>(
+              <div key={r.catId} style={aStyles.alertChip}>
+                <span style={{color:"#e2e8f0"}}>{r.label}</span>
+                <span style={{color:"#f87171",fontWeight:800}}>+{mask(fmt(Math.abs(r.diff)))}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Gráficos linha 1 */}
+      <div style={aStyles.chartsRow}>
+        {dashViewMode==="year"&&(
+          <div style={{...aStyles.card,flex:2}}>
+            <div style={aStyles.cardTitle}>Evolução Mensal</div>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={yearlyData} margin={{top:4,right:4,left:0,bottom:0}}>
+                <defs>
+                  <linearGradient id="gr1" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4ade80" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#4ade80" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="gr2" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f87171" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#f87171" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#0f172a" vertical={false}/>
+                <XAxis dataKey="name" tick={{fill:"#475569",fontSize:11}} axisLine={false} tickLine={false}/>
+                <YAxis tickFormatter={v=>fmtK(v)} tick={{fill:"#475569",fontSize:10}} axisLine={false} tickLine={false} width={52}/>
+                <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:12}} formatter={v=>hidden?"••••••":fmt(v)}/>
+                <Area type="monotone" dataKey="Receita" stroke="#4ade80" strokeWidth={2} fill="url(#gr1)"/>
+                <Area type="monotone" dataKey="Despesa" stroke="#f87171" strokeWidth={2} fill="url(#gr2)"/>
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {pieData.length>0&&(
+          <div style={{...aStyles.card,flex:1,minWidth:240}}>
+            <div style={aStyles.cardTitle}>Despesas por Categoria</div>
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} dataKey="value" paddingAngle={2}>
+                  {pieData.map((_,i)=><Cell key={i} fill={PALETTE[i%PALETTE.length]}/>)}
+                </Pie>
+                <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
+                <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:10,color:"#94a3b8"}}/>
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Gráficos linha 2 */}
+      <div style={aStyles.chartsRow}>
+        {/* Budget analysis */}
+        <div style={{...aStyles.card,flex:1.5}}>
+          <div style={aStyles.cardTitle}>Orçamento × Realizado — Despesas</div>
+          <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
+            {dashBudgetAnalysis.map(r=>(
+              <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                  <span style={{fontSize:12,fontWeight:600,color:"#cbd5e1"}}>{r.label}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmtK(r.spent))}</span>
+                    <span style={{fontSize:11,color:"#334155"}}>/</span>
+                    <span style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{mask(fmtK(r.budgeted))}</span>
+                  </div>
+                </div>
+                {r.budgeted>0&&(
+                  <div style={{height:5,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:3}}>
+                    <div style={{height:"100%",width:`${Math.min(r.pct,100)}%`,borderRadius:99,background:r.over?"#f87171":r.pct>80?"#fbbf24":"#4ade80",transition:"width 0.4s"}}/>
+                  </div>
+                )}
+                <div style={{fontSize:10,fontWeight:700,color:r.over?"#f87171":"#475569",textAlign:"right"}}>
+                  {r.budgeted>0?(r.over?`⚠️ +${mask(fmt(Math.abs(r.diff)))}`:`✓ ${mask(fmt(r.diff))} restante`):"Sem orçamento"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Top 5 + saldo mensal */}
+        <div style={{...aStyles.card,flex:1,minWidth:220,display:"flex",flexDirection:"column",gap:16}}>
+          <div>
+            <div style={aStyles.cardTitle}>Top 5 Despesas</div>
+            <ResponsiveContainer width="100%" height={140}>
+              <BarChart data={topExpenses} layout="vertical" margin={{left:0,right:8}}>
+                <XAxis type="number" hide/>
+                <YAxis type="category" dataKey="label" tick={{fill:"#94a3b8",fontSize:10}} width={110} axisLine={false} tickLine={false}/>
+                <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
+                <Bar dataKey="spent" fill="#f472b6" radius={[0,4,4,0]} barSize={10}/>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {dashViewMode==="year"&&(
+            <div>
+              <div style={aStyles.cardTitle}>Saldo Mês a Mês</div>
+              <ResponsiveContainer width="100%" height={110}>
+                <BarChart data={yearlyData} barSize={10}>
+                  <XAxis dataKey="name" tick={{fill:"#475569",fontSize:9}} axisLine={false} tickLine={false}/>
+                  <YAxis hide/>
+                  <Tooltip contentStyle={{background:"#0a1628",border:"1px solid #1e293b",borderRadius:8,fontSize:11}} formatter={v=>hidden?"••••••":fmt(v)}/>
+                  <Bar dataKey="Saldo" radius={[3,3,0,0]}>
+                    {yearlyData.map((m,i)=><Cell key={i} fill={m.Saldo>=0?"#4ade80":"#f87171"}/>)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Insights */}
+      <div style={aStyles.card}>
+        <div style={aStyles.cardTitle}>💡 Insights</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+          {(()=>{
+            const insights=[];
+            if (savingsRate>=20) insights.push({icon:"🏆",text:`Taxa de poupança de ${savingsRate.toFixed(1)}% — acima dos 20% recomendados.`,color:"#4ade80"});
+            else if (savingsRate>0) insights.push({icon:"📊",text:`Taxa de poupança de ${savingsRate.toFixed(1)}%. Meta recomendada: 20%.`,color:"#fbbf24"});
+            else if (savingsRate<0) insights.push({icon:"🚨",text:`Despesas superiores às receitas em ${mask(fmt(Math.abs(dashSaldo)))}.`,color:"#f87171"});
+            const worstCat=dashBudgetAnalysis.find(r=>r.over);
+            if(worstCat) insights.push({icon:"⚠️",text:`${worstCat.label} é a mais estourada: ${worstCat.pct.toFixed(0)}% do orçamento usado.`,color:"#f87171"});
+            const biggestExp=topExpenses[0];
+            if(biggestExp) insights.push({icon:"💸",text:`${biggestExp.label} é sua maior despesa: ${mask(fmt(biggestExp.spent))}.`,color:"#f472b6"});
+            if(dashViewMode==="year"){
+              const best=[...yearlyData].sort((a,b)=>b.Saldo-a.Saldo)[0];
+              const worst=[...yearlyData].sort((a,b)=>a.Saldo-b.Saldo)[0];
+              if(best?.Saldo>0) insights.push({icon:"✨",text:`Melhor mês: ${best.name} com saldo de ${mask(fmt(best.Saldo))}.`,color:"#60a5fa"});
+              if(worst?.Saldo<0) insights.push({icon:"📉",text:`Mês mais difícil: ${worst.name} com saldo de ${mask(fmt(worst.Saldo))}.`,color:"#fb923c"});
+            }
+            if(insights.length===0) insights.push({icon:"📭",text:"Adicione lançamentos para ver os insights aqui.",color:"#475569"});
+            return insights.map((ins,i)=>(
+              <div key={i} style={{...aStyles.insightCard,borderColor:ins.color+"44"}}>
+                <span style={{fontSize:18,flexShrink:0}}>{ins.icon}</span>
+                <span style={{fontSize:12,fontWeight:600,lineHeight:1.5,color:ins.color}}>{ins.text}</span>
+              </div>
+            ));
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -715,10 +935,11 @@ export default function App() {
               <button style={S.arrowBtn} onClick={()=>setSelectedMonth(m=>(m+1)%12)}>›</button>
             </div>
             <nav style={S.sideNav}>
-              <NavButton id="dashboard" icon="📊" label="Resumo"/>
-              <NavButton id="add"       icon="✏️"  label="Lançar"/>
-              <NavButton id="budget"    icon="🎯" label="Orçamento" onClick={openBudget}/>
-              <NavButton id="invest"    icon="💎" label="Investimentos" onClick={openInvest}/>
+              <NavButton id="dashboard"  icon="📊" label="Resumo"/>
+              <NavButton id="analytics"  icon="📈" label="Dashboard"/>
+              <NavButton id="add"        icon="✏️"  label="Lançar"/>
+              <NavButton id="budget"     icon="🎯" label="Orçamento" onClick={openBudget}/>
+              <NavButton id="invest"     icon="💎" label="Investimentos" onClick={openInvest}/>
             </nav>
             <div style={S.sideActions}>
               <button style={S.sideActionBtn} onClick={()=>setHidden(h=>!h)}>
@@ -732,10 +953,11 @@ export default function App() {
           </aside>
           <main style={S.desktopMain}>
             <div style={S.desktopContent}>
-              {view==="dashboard"&&dashboardJSX}
-              {view==="add"      &&addFormJSX}
-              {view==="budget"   &&budgetFormJSX}
-              {view==="invest"   &&investFormJSX}
+              {view==="dashboard" &&dashboardJSX}
+              {view==="analytics" &&analyticsJSX}
+              {view==="add"       &&addFormJSX}
+              {view==="budget"    &&budgetFormJSX}
+              {view==="invest"    &&investFormJSX}
             </div>
           </main>
         </div>
@@ -756,29 +978,28 @@ export default function App() {
             </div>
           </div>
           <div style={S.content}>
-            {view==="dashboard"&&dashboardJSX}
-            {view==="add"      &&addFormJSX}
-            {view==="budget"   &&budgetFormJSX}
-            {view==="invest"   &&investFormJSX}
+            {view==="dashboard" &&dashboardJSX}
+            {view==="analytics" &&analyticsJSX}
+            {view==="add"       &&addFormJSX}
+            {view==="budget"    &&budgetFormJSX}
+            {view==="invest"    &&investFormJSX}
           </div>
           <div style={S.nav} className="mobile-nav">
             <NavButton id="dashboard" icon="📊" label="Resumo"/>
+            <NavButton id="analytics" icon="📈" label="Dash"/>
             <button style={S.addBtn} onClick={()=>setView("add")}>
-              <span style={{fontSize:26,lineHeight:1}}>+</span>
+              <span style={{fontSize:22,lineHeight:1}}>+</span>
             </button>
             <NavButton id="budget" icon="🎯" label="Orçamento" onClick={openBudget}/>
             <NavButton id="invest" icon="💎" label="Invest." onClick={openInvest}/>
           </div>
         </>
       )}
-      {/* 2FA Enrollment Modal */}
       {show2FA&&(
         <div style={eStyles.overlay} onClick={()=>setShow2FA(false)}>
           <div style={eStyles.modal} onClick={e=>e.stopPropagation()}>
             <div style={eStyles.title}>🔐 Ativar Autenticação em 2 Fatores</div>
-            <div style={{...eStyles.subtitle,marginBottom:16}}>
-              Escaneie o QR code com Google Authenticator ou Authy
-            </div>
+            <div style={{...eStyles.subtitle,marginBottom:16}}>Escaneie o QR code com Google Authenticator ou Authy</div>
             {totp2FAQr&&<img src={totp2FAQr} alt="QR 2FA" style={{width:160,height:160,margin:"0 auto 16px",display:"block",borderRadius:12,background:"#fff",padding:8}}/>}
             <div style={{marginBottom:20}}>
               <label style={eStyles.label}>Confirme com o código gerado</label>
@@ -788,9 +1009,7 @@ export default function App() {
             </div>
             <div style={eStyles.btns}>
               <button style={eStyles.cancelBtn} onClick={()=>setShow2FA(false)}>Cancelar</button>
-              <button style={eStyles.saveBtn} onClick={handle2FAConfirm} disabled={syncing}>
-                {syncing?"Ativando...":"Ativar 2FA"}
-              </button>
+              <button style={eStyles.saveBtn} onClick={handle2FAConfirm} disabled={syncing}>{syncing?"Ativando...":"Ativar 2FA"}</button>
             </div>
           </div>
         </div>
@@ -799,32 +1018,41 @@ export default function App() {
   );
 }
 
-// ─── Budget bar styles ────────────────────────────────────────────────────────
-
 const bStyles = {
-  row:    { marginBottom:14, paddingBottom:14, borderBottom:"1px solid #0f172a" },
-  rowTop: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 },
-  catName:{ fontSize:13, fontWeight:600, color:"#cbd5e1" },
-  amounts:{ display:"flex", alignItems:"center", gap:4 },
-  spent:  { fontSize:14, fontWeight:800 },
-  sep:    { fontSize:12, color:"#334155" },
-  budget: { fontSize:12, color:"#e2e8f0", fontWeight:600 },
-  barBg:  { height:6, background:"#0f172a", borderRadius:99, overflow:"hidden", marginBottom:4 },
-  barFill:{ height:"100%", borderRadius:99, transition:"width 0.4s ease" },
-  diffRow:{ display:"flex", justifyContent:"flex-end" },
+  row:    {marginBottom:14,paddingBottom:14,borderBottom:"1px solid #0f172a"},
+  rowTop: {display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6},
+  catName:{fontSize:13,fontWeight:600,color:"#cbd5e1"},
+  amounts:{display:"flex",alignItems:"center",gap:4},
+  spent:  {fontSize:14,fontWeight:800},
+  sep:    {fontSize:12,color:"#334155"},
+  budget: {fontSize:12,color:"#e2e8f0",fontWeight:600},
+  barBg:  {height:6,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:4},
+  barFill:{height:"100%",borderRadius:99,transition:"width 0.4s ease"},
+  diffRow:{display:"flex",justifyContent:"flex-end"},
 };
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+const aStyles = {
+  toggle:     {display:"flex",background:"#0a1628",borderRadius:8,padding:3,gap:3},
+  toggleBtn:  {padding:"6px 14px",borderRadius:6,border:"none",background:"none",color:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"},
+  toggleActive:{background:"#0f172a",color:"#e2e8f0"},
+  select:     {background:"#0a1628",border:"1px solid #1e293b",color:"#e2e8f0",borderRadius:8,padding:"6px 12px",fontSize:13,fontWeight:600,cursor:"pointer",outline:"none"},
+  kpiRow:     {display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16},
+  kpi:        {background:"#04091a",border:"1px solid",borderRadius:12,padding:"14px 16px"},
+  kpiLabel:   {fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
+  kpiValue:   {fontSize:22,fontWeight:800,marginBottom:2},
+  kpiSub:     {fontSize:10,color:"#334155"},
+  alertBox:   {background:"#1c0a0a",border:"1px solid #7f1d1d",borderRadius:10,padding:"12px 14px",marginBottom:14},
+  alertTitle: {fontSize:11,fontWeight:700,color:"#f87171",marginBottom:8,textTransform:"uppercase",letterSpacing:0.8},
+  alertChip:  {background:"#0f172a",border:"1px solid #7f1d1d",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,display:"flex",gap:6,alignItems:"center"},
+  chartsRow:  {display:"flex",gap:12,flexWrap:"wrap",marginBottom:14},
+  card:       {background:"#04091a",border:"1px solid #0f172a",borderRadius:14,padding:"16px",marginBottom:0,flex:1,minWidth:200},
+  cardTitle:  {fontSize:11,fontWeight:700,color:"#60a5fa",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
+  insightCard:{background:"#0a1628",border:"1px solid",borderRadius:10,padding:"12px",display:"flex",gap:8,alignItems:"flex-start"},
+};
 
 const shared = {
   section:        {background:"#0a1628",borderRadius:16,padding:"14px 16px",marginBottom:14,border:"1px solid #0f2040"},
   sectionTitle:   {fontSize:12,fontWeight:700,color:"#60a5fa",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
-  cards:          {display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10},
-  card:           {borderRadius:14,padding:"14px 16px"},
-  cardGreen:      {background:"linear-gradient(135deg,#052e16,#14532d)",border:"1px solid #166534"},
-  cardRed:        {background:"linear-gradient(135deg,#1c0a0a,#450a0a)",border:"1px solid #7f1d1d"},
-  cardLabel:      {fontSize:11,fontWeight:600,color:"#94a3b8",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
-  cardValue:      {fontSize:18,fontWeight:800,color:"#f1f5f9"},
   balanceCard:    {borderRadius:14,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,border:"1px solid #1e293b"},
   balanceLabel:   {fontSize:13,color:"#e2e8f0",fontWeight:600},
   balanceValue:   {fontSize:24,fontWeight:800},
@@ -832,41 +1060,35 @@ const shared = {
   investSummaryLeft:  {display:"flex",flexDirection:"column",gap:6},
   investSummaryLabel: {fontSize:11,fontWeight:700,color:"#a855f7",textTransform:"uppercase",letterSpacing:1},
   investSummaryValue: {fontSize:20,fontWeight:800,color:"#e9d5ff"},
-  investBankRow:      {display:"flex",gap:6,flexWrap:"wrap"},
-  investBankChip:     {fontSize:10,fontWeight:600,color:"#94a3b8",border:"1px solid",borderRadius:6,padding:"2px 6px"},
-  investArrow:        {fontSize:24,color:"#7c3aed"},
   catRow:     {display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:10,marginBottom:10,borderBottom:"1px solid #0f172a"},
   catName:    {fontSize:14,color:"#cbd5e1"},
-  catAmounts: {display:"flex",gap:8},
-  amtGreen:   {fontSize:13,fontWeight:700,color:"#4ade80"},
-  amtRed:     {fontSize:13,fontWeight:700,color:"#f87171"},
   legend:     {display:"flex",justifyContent:"center",gap:20,marginTop:8},
   legendItem: {display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#64748b"},
   dot:        {width:8,height:8,borderRadius:"50%",display:"inline-block"},
-  txRow:   {display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #0f172a"},
-  txCat:   {fontSize:14,fontWeight:600,color:"#e2e8f0"},
-  txDesc:  {fontSize:12,color:"#64748b",marginTop:2},
-  txDate:  {fontSize:11,color:"#e2e8f0",marginTop:4},
-  txRight: {display:"flex",alignItems:"center",gap:10},
-  txAmt:   {fontSize:15,fontWeight:700},
-  delBtn:  {background:"none",border:"none",color:"#e2e8f0",fontSize:14,cursor:"pointer",padding:4},
-  editBtn: {background:"none",border:"none",color:"#475569",fontSize:14,cursor:"pointer",padding:4},
-  empty:     {textAlign:"center",padding:"48px 20px"},
-  emptyIcon: {fontSize:48,marginBottom:12},
-  emptyText: {color:"#475569",fontWeight:600,fontSize:15,marginBottom:6},
-  emptyHint: {color:"#334155",fontSize:13},
+  txRow:      {display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"10px 0",borderBottom:"1px solid #0f172a"},
+  txCat:      {fontSize:14,fontWeight:600,color:"#e2e8f0"},
+  txDesc:     {fontSize:12,color:"#64748b",marginTop:2},
+  txDate:     {fontSize:11,color:"#e2e8f0",marginTop:4},
+  txRight:    {display:"flex",alignItems:"center",gap:10},
+  txAmt:      {fontSize:15,fontWeight:700},
+  delBtn:     {background:"none",border:"none",color:"#e2e8f0",fontSize:14,cursor:"pointer",padding:4},
+  editBtn:    {background:"none",border:"none",color:"#475569",fontSize:14,cursor:"pointer",padding:4},
+  empty:      {textAlign:"center",padding:"48px 20px"},
+  emptyIcon:  {fontSize:48,marginBottom:12},
+  emptyText:  {color:"#475569",fontWeight:600,fontSize:15,marginBottom:6},
+  emptyHint:  {color:"#334155",fontSize:13},
   exportBanner:      {background:"#0a1628",border:"1px solid #1e3a5f",borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",marginTop:4},
   exportBannerTitle: {fontSize:14,fontWeight:700,color:"#93c5fd"},
   exportBannerSub:   {fontSize:11,color:"#475569",marginTop:2},
   loadingBar:  {background:"#0f172a",border:"1px solid #1e293b",borderRadius:10,padding:"8px 14px",fontSize:12,color:"#60a5fa",marginBottom:12,textAlign:"center"},
-  form:       {padding:"4px 0"},
-  typeToggle: {display:"flex",gap:10,marginBottom:16},
-  typeBtn:    {flex:1,padding:"12px 0",borderRadius:12,border:"2px solid #0f172a",background:"#0a1628",color:"#64748b",fontWeight:700,fontSize:14,cursor:"pointer"},
+  form:        {padding:"4px 0"},
+  typeToggle:  {display:"flex",gap:10,marginBottom:16},
+  typeBtn:     {flex:1,padding:"12px 0",borderRadius:12,border:"2px solid #0f172a",background:"#0a1628",color:"#64748b",fontWeight:700,fontSize:14,cursor:"pointer"},
   typeBtnActiveGreen: {borderColor:"#16a34a",color:"#4ade80",background:"#052e16"},
   typeBtnActiveRed:   {borderColor:"#dc2626",color:"#f87171",background:"#1c0a0a"},
-  field:  {marginBottom:16},
-  label:  {display:"block",fontSize:12,fontWeight:700,color:"#60a5fa",textTransform:"uppercase",letterSpacing:0.8,marginBottom:8},
-  input:  {width:"100%",background:"#0a1628",border:"1.5px solid #0f172a",color:"#e2e8f0",borderRadius:10,padding:"12px 14px",fontSize:16,boxSizing:"border-box",outline:"none",fontFamily:"inherit"},
+  field:   {marginBottom:16},
+  label:   {display:"block",fontSize:12,fontWeight:700,color:"#60a5fa",textTransform:"uppercase",letterSpacing:0.8,marginBottom:8},
+  input:   {width:"100%",background:"#0a1628",border:"1.5px solid #0f172a",color:"#e2e8f0",borderRadius:10,padding:"12px 14px",fontSize:16,boxSizing:"border-box",outline:"none",fontFamily:"inherit"},
   catGrid:      {display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8},
   catBtn:       {background:"#0a1628",border:"1.5px solid #0f172a",borderRadius:10,padding:"10px 4px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:4},
   catBtnActive: {borderColor:"#3b82f6",background:"#0f2040"},
@@ -884,22 +1106,24 @@ const shared = {
   monthLabel:  {fontSize:13,fontWeight:600,color:"#e2e8f0",minWidth:80,textAlign:"center"},
   toast:   {position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",color:"#fff",fontWeight:700,fontSize:14,padding:"10px 22px",borderRadius:99,zIndex:999,boxShadow:"0 4px 24px rgba(0,0,0,0.4)",animation:"fadeIn 0.2s ease"},
   syncDot: {position:"fixed",top:16,right:16,fontSize:18,zIndex:998,animation:"pulse 1.5s infinite"},
-  navBtn:      {display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:"6px 10px"},
+  navBtn:      {display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:"6px 6px"},
   navBtnActive:{},
-  navIcon:     {fontSize:20},
-  navLabel:    {fontSize:10,fontWeight:600},
+  navIcon:     {fontSize:18},
+  navLabel:    {fontSize:9,fontWeight:600},
 };
 
 const mobileStyles = {
   ...shared,
-  root:    {fontFamily:"'DM Sans','Helvetica Neue',sans-serif",background:"#020817",color:"#e2e8f0",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column"},
-  header:  {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",borderBottom:"1px solid #0f172a",background:"#020817",position:"sticky",top:0,zIndex:10},
+  root:        {fontFamily:"'DM Sans','Helvetica Neue',sans-serif",background:"#020817",color:"#e2e8f0",minHeight:"100vh",maxWidth:430,margin:"0 auto",display:"flex",flexDirection:"column"},
+  header:      {display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",borderBottom:"1px solid #0f172a",background:"#020817",position:"sticky",top:0,zIndex:10},
   headerRight: {display:"flex",alignItems:"center",gap:6},
-  logo:    {fontSize:20,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",letterSpacing:"-0.5px"},
-  iconBtn: {background:"#0f172a",border:"1px solid #1e3a5f",borderRadius:8,fontSize:16,width:32,height:32,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
-  content: {flex:1,overflowY:"auto",padding:"14px 14px 90px"},
-  nav:     {position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#020817",borderTop:"1px solid #0f172a",display:"flex",alignItems:"center",justifyContent:"space-around",padding:"8px 0 20px",zIndex:20},
-  addBtn:  {width:50,height:50,borderRadius:"50%",background:"linear-gradient(135deg,#3b82f6,#6366f1)",border:"none",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 20px rgba(59,130,246,0.4)",fontSize:26,lineHeight:1,marginBottom:4},
+  logo:        {fontSize:20,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",letterSpacing:"-0.5px"},
+  iconBtn:     {background:"#0f172a",border:"1px solid #1e3a5f",borderRadius:8,fontSize:16,width:32,height:32,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
+  content:     {flex:1,overflowY:"auto",padding:"14px 14px 96px"},
+  nav:         {position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:"#020817",borderTop:"1px solid #0f172a",display:"flex",alignItems:"center",justifyContent:"space-around",padding:"8px 0 20px",zIndex:20},
+  addBtn:      {width:46,height:46,borderRadius:"50%",background:"linear-gradient(135deg,#3b82f6,#6366f1)",border:"none",color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 20px rgba(59,130,246,0.4)",fontSize:22,lineHeight:1,marginBottom:2},
+  amtGreen:    {fontSize:13,fontWeight:700,color:"#4ade80"},
+  amtRed:      {fontSize:13,fontWeight:700,color:"#f87171"},
 };
 
 const desktopStyles = {
@@ -918,15 +1142,16 @@ const desktopStyles = {
   sideActionBtn:  {background:"#0f172a",border:"1px solid #1e293b",borderRadius:10,color:"#94a3b8",fontSize:13,fontWeight:600,padding:"10px 14px",cursor:"pointer",textAlign:"left"},
   sideFooter:     {fontSize:10,color:"#1e293b",marginTop:16,lineHeight:1.5},
   desktopMain:    {marginLeft:240,flex:1,overflowY:"auto",minHeight:"100vh"},
-  desktopContent: {maxWidth:820,margin:"0 auto",padding:"32px 32px 48px"},
+  desktopContent: {maxWidth:900,margin:"0 auto",padding:"32px 32px 48px"},
   monthPicker:    {display:"flex",alignItems:"center",gap:8,marginBottom:24},
   arrowBtn:       {background:"#0f172a",border:"none",color:"#94a3b8",fontSize:20,width:32,height:32,borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
   monthLabel:     {fontSize:15,fontWeight:700,color:"#e2e8f0",minWidth:120,textAlign:"center"},
-  cardValue:      {fontSize:22,fontWeight:800,color:"#f1f5f9"},
   balanceValue:   {fontSize:28,fontWeight:800},
   catGrid:        {display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8},
-  toast:  {position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",color:"#fff",fontWeight:700,fontSize:14,padding:"10px 22px",borderRadius:99,zIndex:999,boxShadow:"0 4px 24px rgba(0,0,0,0.4)",animation:"fadeIn 0.2s ease"},
-  syncDot:{position:"fixed",top:20,right:24,fontSize:20,zIndex:998,animation:"pulse 1.5s infinite"},
+  toast:   {position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",color:"#fff",fontWeight:700,fontSize:14,padding:"10px 22px",borderRadius:99,zIndex:999,boxShadow:"0 4px 24px rgba(0,0,0,0.4)",animation:"fadeIn 0.2s ease"},
+  syncDot: {position:"fixed",top:20,right:24,fontSize:20,zIndex:998,animation:"pulse 1.5s infinite"},
+  amtGreen:{fontSize:13,fontWeight:700,color:"#4ade80"},
+  amtRed:  {fontSize:13,fontWeight:700,color:"#f87171"},
 };
 
 const eStyles = {
@@ -951,6 +1176,7 @@ const css = `
   input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(0.4);}
   button:hover{opacity:0.85;}
   button:disabled{opacity:0.6;cursor:not-allowed;}
+  select option{background:#0a1628;}
   @keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
   .mobile-header{padding-top:max(12px, env(safe-area-inset-top)) !important;}
