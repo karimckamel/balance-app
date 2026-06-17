@@ -805,7 +805,39 @@ export default function App() {
         )}
       </div>
 
-      {/* Investimentos — tabela de evolução */}
+      {/* Gráficos linha 2 — Budget */}
+      <div style={aStyles.chartsRow}>
+        <div style={{...aStyles.card,flex:1}}>
+          <div style={aStyles.cardTitle}>Orçamento × Realizado — Despesas</div>
+          <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
+            {dashBudgetAnalysis.map(r=>{
+              const barColor = r.over?"#f87171":r.pct>80?"#fbbf24":"#4ade80";
+              return (
+              <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                  <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.label}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmt(r.spent))}</span>
+                    <span style={{fontSize:11,color:"#334155"}}>/</span>
+                    <span style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{mask(fmt(r.budgeted))}</span>
+                  </div>
+                </div>
+                {r.budgeted>0&&(
+                  <div style={{height:5,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:3}}>
+                    <div style={{height:"100%",width:`${Math.min(r.pct,100)}%`,borderRadius:99,background:barColor,transition:"width 0.4s"}}/>
+                  </div>
+                )}
+                <div style={{fontSize:10,fontWeight:700,color:r.budgeted>0?barColor:"#475569",textAlign:"right"}}>
+                  {r.budgeted>0?(r.over?`⚠️ +${mask(fmt(Math.abs(r.diff)))}`:`✓ ${mask(fmt(r.diff))} restante`):"Sem orçamento"}
+                </div>
+              </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Evolução Investimentos — abaixo do orçamento */}
       {(()=>{
         const invEvolution = MONTHS.map((m,i)=>{
           const snap = getInvestMonth(i,selectedYear);
@@ -813,11 +845,8 @@ export default function App() {
           const prevSnap = getInvestMonth(i-1,selectedYear);
           const prevTotal = INV_BANKS.reduce((s,b)=>s+(prevSnap[b.id]||0),0);
           return {
-            name:m,
-            Total:total,
-            Itaú: snap.itau||0,
-            XP: snap.xp||0,
-            Bradesco: snap.bradesco||0,
+            name:m, Total:total,
+            Itaú: snap.itau||0, XP: snap.xp||0, Bradesco: snap.bradesco||0,
             delta: i>0&&prevTotal>0 ? total-prevTotal : null,
           };
         }).filter(m=>m.Total>0);
@@ -855,35 +884,6 @@ export default function App() {
           </div>
         );
       })()}
-
-      {/* Gráficos linha 2 — Budget */}
-      <div style={aStyles.chartsRow}>
-        <div style={{...aStyles.card,flex:1}}>
-          <div style={aStyles.cardTitle}>Orçamento × Realizado — Despesas</div>
-          <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:10}}>
-            {dashBudgetAnalysis.map(r=>(
-              <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                  <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.label}</span>
-                  <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmt(r.spent))}</span>
-                    <span style={{fontSize:11,color:"#334155"}}>/</span>
-                    <span style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{mask(fmt(r.budgeted))}</span>
-                  </div>
-                </div>
-                {r.budgeted>0&&(
-                  <div style={{height:5,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:3}}>
-                    <div style={{height:"100%",width:`${Math.min(r.pct,100)}%`,borderRadius:99,background:r.over?"#f87171":r.pct>80?"#fbbf24":"#4ade80",transition:"width 0.4s"}}/>
-                  </div>
-                )}
-                <div style={{fontSize:10,fontWeight:700,color:r.over?"#f87171":"#e2e8f0",textAlign:"right"}}>
-                  {r.budgeted>0?(r.over?`⚠️ +${mask(fmt(Math.abs(r.diff)))}`:`✓ ${mask(fmt(r.diff))} restante`):"Sem orçamento"}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
     </div>
   );
 
