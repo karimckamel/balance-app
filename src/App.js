@@ -170,7 +170,18 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const showToast = (msg,ok=true) => { setToast({msg,ok}); setTimeout(()=>setToast(null),2500); };
+  // Recarrega os inputs do orçamento sempre que o mês mudar (se estiver na tela de orçamento)
+  useEffect(() => {
+    if (view !== "budget") return;
+    const edits = {};
+    ALL_CATS.forEach(c => {
+      const val = budgetScope === "base"
+        ? getBaseAmount(budgets, c.id, selectedYear)
+        : getBudgetAmount(budgets, c.id, selectedYear, selectedMonth);
+      edits[c.id] = val > 0 ? String(val) : "";
+    });
+    setBudgetEdits(edits);
+  }, [selectedMonth, view, budgetScope, budgets]);
   const mask = (val) => hidden ? "••••••" : val;
 
   // ─── CRUD ──────────────────────────────────────────────────────────────────
@@ -327,15 +338,12 @@ export default function App() {
   };
 
   const openBudget = () => {
-    const edits = {};
-    ALL_CATS.forEach(c => {
-      // Ao abrir orçamento, mostra o valor efetivo do mês (pode ser override ou base)
-      const val = getBudgetAmount(budgets, c.id, selectedYear, selectedMonth);
-      edits[c.id] = val > 0 ? String(val) : "";
-    });
-    setBudgetEdits(edits);
     setBudgetScope("month");
     setView("budget");
+  }; = () => {
+    setBudgetScope("month");
+    setView("budget");
+    // useEffect will load the correct values
   };
 
   const handle2FAEnroll = async () => {
@@ -679,27 +687,9 @@ export default function App() {
       </div>
       <div style={S.typeToggle}>
         <button style={{...S.typeBtn,...(budgetScope==="month"?{borderColor:"#d97706",color:"#fbbf24",background:"#1a1000"}:{})}}
-          onClick={()=>{
-            setBudgetScope("month");
-            // Ao trocar para mês: mostra valor efetivo do mês
-            const edits={};
-            ALL_CATS.forEach(c=>{
-              const val = getBudgetAmount(budgets,c.id,selectedYear,selectedMonth);
-              edits[c.id] = val>0?String(val):"";
-            });
-            setBudgetEdits(edits);
-          }}>📅 Este mês</button>
+          onClick={()=>setBudgetScope("month")}>📅 Este mês</button>
         <button style={{...S.typeBtn,...(budgetScope==="base"?{borderColor:"#d97706",color:"#fbbf24",background:"#1a1000"}:{})}}
-          onClick={()=>{
-            setBudgetScope("base");
-            // Ao trocar para base anual: mostra apenas o valor base (não o override do mês)
-            const edits={};
-            ALL_CATS.forEach(c=>{
-              const val = getBaseAmount(budgets,c.id,selectedYear);
-              edits[c.id] = val>0?String(val):"";
-            });
-            setBudgetEdits(edits);
-          }}>📋 Base anual</button>
+          onClick={()=>setBudgetScope("base")}>📋 Base anual</button>
       </div>
       <div style={{fontSize:11,color:"#475569",marginBottom:16,lineHeight:1.5}}>
         {budgetScope==="month"
