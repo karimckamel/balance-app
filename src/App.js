@@ -170,7 +170,7 @@ export default function App() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Recarrega os inputs do orçamento sempre que o mês mudar (se estiver na tela de orçamento)
+  // Recarrega os inputs do orçamento sempre que o mês ou escopo mudar
   useEffect(() => {
     if (view !== "budget") return;
     const edits = {};
@@ -181,7 +181,7 @@ export default function App() {
       edits[c.id] = val > 0 ? String(val) : "";
     });
     setBudgetEdits(edits);
-  }, [selectedMonth, view, budgetScope, budgets]);
+  }, [selectedMonth, selectedYear, view, budgetScope, budgets]);
   const mask = (val) => hidden ? "••••••" : val;
 
   // ─── CRUD ──────────────────────────────────────────────────────────────────
@@ -337,9 +337,19 @@ export default function App() {
     showToast("Orçamento salvo ☁️");
   };
 
-  const openBudget = () => {
-    setBudgetScope("month");
-    setView("budget");
+  const changeMonth = (newMonth) => {
+    setSelectedMonth(newMonth);
+    // Se estiver na tela de orçamento, recarrega os inputs imediatamente
+    if (view === "budget") {
+      const edits = {};
+      ALL_CATS.forEach(c => {
+        const val = budgetScope === "base"
+          ? getBaseAmount(budgets, c.id, selectedYear)
+          : getBudgetAmount(budgets, c.id, selectedYear, newMonth);
+        edits[c.id] = val > 0 ? String(val) : "";
+      });
+      setBudgetEdits(edits);
+    }
   }; = () => {
     setBudgetScope("month");
     setView("budget");
@@ -680,7 +690,7 @@ export default function App() {
   );
 
   const budgetFormJSX = (
-    <div style={S.form}>
+    <div key={`budget-${selectedMonth}-${budgetScope}`} style={S.form}>
       <div style={{...S.investHeader}}>
         <div style={{...S.investTitle,color:"#fbbf24"}}>🎯 Orçamento</div>
         <div style={S.investSubtitle}>{MONTHS_FULL[selectedMonth]} {selectedYear}</div>
@@ -955,9 +965,9 @@ export default function App() {
             <div style={S.sidebarLogo}>₿alance</div>
             <div style={S.sidebarEmail}>{session.user.email}</div>
             <div style={S.monthPicker}>
-              <button style={S.arrowBtn} onClick={()=>setSelectedMonth(m=>(m-1+12)%12)}>‹</button>
+              <button style={S.arrowBtn} onClick={()=>changeMonth((selectedMonth-1+12)%12)}>‹</button>
               <span style={S.monthLabel}>{MONTHS_FULL[selectedMonth]}</span>
-              <button style={S.arrowBtn} onClick={()=>setSelectedMonth(m=>(m+1)%12)}>›</button>
+              <button style={S.arrowBtn} onClick={()=>changeMonth((selectedMonth+1)%12)}>›</button>
             </div>
             <nav style={S.sideNav}>
               <NavButton id="dashboard"  icon="📊" label="Resumo"/>
@@ -992,9 +1002,9 @@ export default function App() {
             <span style={S.logo}>₿alance</span>
             <div style={S.headerRight}>
               <div style={S.monthPicker}>
-                <button style={S.arrowBtn} onClick={()=>setSelectedMonth(m=>(m-1+12)%12)}>‹</button>
+                <button style={S.arrowBtn} onClick={()=>changeMonth((selectedMonth-1+12)%12)}>‹</button>
                 <span style={S.monthLabel}>{MONTHS_FULL[selectedMonth]}</span>
-                <button style={S.arrowBtn} onClick={()=>setSelectedMonth(m=>(m+1)%12)}>›</button>
+                <button style={S.arrowBtn} onClick={()=>changeMonth((selectedMonth+1)%12)}>›</button>
               </div>
               <button style={S.iconBtn} onClick={handleExport}>📥</button>
               <button style={S.iconBtn} onClick={()=>setHidden(h=>!h)}>{hidden?"🙈":"👁️"}</button>
