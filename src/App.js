@@ -350,10 +350,11 @@ export default function App() {
       });
       setBudgetEdits(edits);
     }
-  }; = () => {
+  };
+
+  const openBudget = () => {
     setBudgetScope("month");
     setView("budget");
-    // useEffect will load the correct values
   };
 
   const handle2FAEnroll = async () => {
