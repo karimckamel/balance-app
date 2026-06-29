@@ -4,8 +4,6 @@ import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
 import Auth from "./Auth";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const CATEGORIES = {
   receita: [
     { id: "salario",       label: "Salário",      icon: "💼" },
@@ -43,18 +41,15 @@ const INV_BANKS = [
 
 const MONTHS      = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
 const MONTHS_FULL = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
-const RECEITA_CATS = ["salario","imoveis","investimentos","outros_r"];
 const DESPESA_CATS = ["moradia","alimentacao","transporte","saude","educacao","compras","nina","viagens","empregada","corpo","outros_d"];
 const PALETTE = ["#60a5fa","#a78bfa","#34d399","#f472b6","#fbbf24","#f87171","#38bdf8","#c084fc","#4ade80","#fb923c","#e879f9"];
-
 const ALL_CATS = [...CATEGORIES.receita, ...CATEGORIES.despesa];
+
 const fmt      = (v) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const fmtK     = (v) => v >= 1000 ? `R$${(v/1000).toFixed(1)}k` : fmt(v);
 const fmtNum   = (v) => Number(v.toFixed(2));
-const getCat   = (id) => ALL_CATS.find(c => c.id === id);
+const getCat      = (id) => ALL_CATS.find(c => c.id === id);
 const getCatLabel = (id) => { const c = getCat(id); return c ? `${c.icon} ${c.label}` : id; };
-
-// ─── Excel Export ─────────────────────────────────────────────────────────────
 
 function exportToExcel(transactions, investments, budgets, year) {
   const wb = XLSX.utils.book_new();
@@ -92,6 +87,7 @@ function exportToExcel(transactions, investments, budgets, year) {
 // ─── Budget helpers ───────────────────────────────────────────────────────────
 
 function getBudgetAmount(budgets, categoryId, year, month) {
+  // Priority: month-specific > base anual (month=null) > hardcoded default
   const monthly = budgets.find(b => b.category===categoryId && b.year===year && b.month===month);
   if (monthly) return monthly.amount;
   const base = budgets.find(b => b.category===categoryId && b.year===year && b.month===null);
@@ -99,7 +95,17 @@ function getBudgetAmount(budgets, categoryId, year, month) {
   return DEFAULT_BUDGETS[categoryId] ?? 0;
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
+function getBaseAmount(budgets, categoryId, year) {
+  // Returns just the base anual value (month=null), or default
+  const base = budgets.find(b => b.category===categoryId && b.year===year && b.month===null);
+  if (base) return base.amount;
+  return DEFAULT_BUDGETS[categoryId] ?? 0;
+}
+
+function hasMonthOverride(budgets, categoryId, year, month) {
+  // Returns true if this category has a specific override for this month
+  return budgets.some(b => b.category===categoryId && b.year===year && b.month===month);
+}
 
 export default function App() {
   const [session,      setSession]      = useState(undefined);
@@ -133,7 +139,6 @@ export default function App() {
   const [editAmount,   setEditAmount]   = useState("");
   const [editDesc,     setEditDesc]     = useState("");
 
-  // Dashboard analítico
   const [dashViewMode, setDashViewMode] = useState("year");
   const [dashMonth,    setDashMonth]    = useState(new Date().getMonth());
 
@@ -230,31 +235,93 @@ export default function App() {
     showToast("Investimentos salvos ☁️");
   };
 
+  // ─── Budget save — lógica corrigida ────────────────────────────────────────
+
   const saveBudgets = async () => {
-    const rows = Object.entries(budgetEdits)
-      .filter(([,v]) => v !== "")
-      .map(([catId, v]) => ({
+    const changedEntries = Object.entries(budgetEdits).filter(([,v]) => v !== "");
+    if (changedEntries.length === 0) return showToast("Nenhuma alteração", false);
+
+    setSyncing(true);
+
+    if (budgetScope === "month") {
+      // MODO MÊS: salva apenas para este mês específico (month=selectedMonth)
+      // Não afeta base anual nem outros meses
+      const rows = changedEntries.map(([catId, v]) => ({
         user_id: session.user.id,
         category: catId,
         year: selectedYear,
-        month: budgetScope === "month" ? selectedMonth : null,
+        month: selectedMonth,
         amount: parseFloat(String(v).replace(",",".")) || 0,
       }));
-    if (rows.length===0) return showToast("Nenhuma alteração",false);
-    setSyncing(true);
-    const {data,error} = await supabase.from("budgets")
-      .upsert(rows,{onConflict:"user_id,category,year,month"})
-      .select();
-    setSyncing(false);
-    if (error) return showToast("Erro ao salvar orçamento",false);
-    setBudgets(prev => {
-      const updated = [...prev];
-      data.forEach(newB => {
-        const idx = updated.findIndex(b=>b.category===newB.category&&b.year===newB.year&&b.month===newB.month);
-        if (idx>=0) updated[idx]=newB; else updated.push(newB);
+      const {data, error} = await supabase.from("budgets")
+        .upsert(rows, {onConflict:"user_id,category,year,month"})
+        .select();
+      setSyncing(false);
+      if (error) return showToast("Erro ao salvar orçamento", false);
+      setBudgets(prev => {
+        const updated = [...prev];
+        data.forEach(newB => {
+          const idx = updated.findIndex(b=>b.category===newB.category&&b.year===newB.year&&b.month===newB.month);
+          if (idx>=0) updated[idx]=newB; else updated.push(newB);
+        });
+        return updated;
       });
-      return updated;
-    });
+
+    } else {
+      // MODO BASE ANUAL: salva o base (month=null) E propaga para meses
+      // que NÃO têm override específico e ainda têm o valor antigo da base
+      const allRows = [];
+
+      for (const [catId, v] of changedEntries) {
+        const newAmount = parseFloat(String(v).replace(",",".")) || 0;
+        const oldBaseAmount = getBaseAmount(budgets, catId, selectedYear);
+
+        // Sempre salva/atualiza o base anual
+        allRows.push({
+          user_id: session.user.id,
+          category: catId,
+          year: selectedYear,
+          month: null,
+          amount: newAmount,
+        });
+
+        // Para cada mês: se não tem override específico, não precisa fazer nada
+        // (eles herdarão o novo base automaticamente via getBudgetAmount)
+        // Se tem override específico com valor IGUAL ao base antigo, atualiza também
+        // (significa que foi copiado do base, não editado manualmente)
+        for (let mo = 0; mo < 12; mo++) {
+          const monthEntry = budgets.find(b =>
+            b.category===catId && b.year===selectedYear && b.month===mo
+          );
+          if (monthEntry && monthEntry.amount === oldBaseAmount) {
+            // Este mês tinha o mesmo valor do base antigo — atualiza junto
+            allRows.push({
+              user_id: session.user.id,
+              category: catId,
+              year: selectedYear,
+              month: mo,
+              amount: newAmount,
+            });
+          }
+          // Se monthEntry existe com valor DIFERENTE do base antigo = override manual = não toca
+        }
+      }
+
+      const {data, error} = await supabase.from("budgets")
+        .upsert(allRows, {onConflict:"user_id,category,year,month"})
+        .select();
+      setSyncing(false);
+      if (error) return showToast("Erro ao salvar orçamento", false);
+      setBudgets(prev => {
+        const updated = [...prev];
+        data.forEach(newB => {
+          const idx = updated.findIndex(b=>b.category===newB.category&&b.year===newB.year&&b.month===newB.month);
+          if (idx>=0) updated[idx]=newB; else updated.push(newB);
+        });
+        return updated;
+      });
+    }
+
     setBudgetEdits({});
     showToast("Orçamento salvo ☁️");
   };
@@ -262,6 +329,7 @@ export default function App() {
   const openBudget = () => {
     const edits = {};
     ALL_CATS.forEach(c => {
+      // Ao abrir orçamento, mostra o valor efetivo do mês (pode ser override ou base)
       const val = getBudgetAmount(budgets, c.id, selectedYear, selectedMonth);
       edits[c.id] = val > 0 ? String(val) : "";
     });
@@ -334,20 +402,20 @@ export default function App() {
   const budgetRows = useMemo(()=>{
     const rows=[];
     ALL_CATS.forEach(cat=>{
-      const budgeted = getBudgetAmount(budgets,cat.id,selectedYear,selectedMonth);
+      const budgeted  = getBudgetAmount(budgets,cat.id,selectedYear,selectedMonth);
       const realSpent = monthlyTx.filter(t=>t.category===cat.id).reduce((s,t)=>s+t.amount,0);
       if (budgeted===0&&realSpent===0) return;
       const isReceita = CATEGORIES.receita.find(c=>c.id===cat.id);
-      const pct = budgeted>0 ? Math.min((realSpent/budgeted)*100,100) : 100;
-      const over = budgeted>0 && realSpent>budgeted;
-      const diff = budgeted - realSpent;
-      rows.push({ cat, budgeted, realSpent, pct, over, diff, isReceita });
+      const pct  = budgeted>0 ? Math.min((realSpent/budgeted)*100,100) : 100;
+      const over  = budgeted>0 && realSpent>budgeted;
+      const diff  = budgeted - realSpent;
+      const hasOverride = hasMonthOverride(budgets,cat.id,selectedYear,selectedMonth);
+      rows.push({ cat, budgeted, realSpent, pct, over, diff, isReceita, hasOverride });
     });
     return rows;
   },[budgets,monthlyTx,selectedMonth,selectedYear]);
 
-  // ─── Dashboard analítico data ──────────────────────────────────────────────
-
+  // Dashboard analítico
   const dashFiltered = useMemo(() => {
     return transactions.filter(t => {
       const d = new Date(t.date+"T12:00:00");
@@ -359,16 +427,9 @@ export default function App() {
   const dashTotalReceita = dashFiltered.filter(t=>t.type==="receita").reduce((s,t)=>s+t.amount,0);
   const dashTotalDespesa = dashFiltered.filter(t=>t.type==="despesa").reduce((s,t)=>s+t.amount,0);
   const dashSaldo        = dashTotalReceita - dashTotalDespesa;
-
   const monthsWithData   = yearlyData.filter(m=>m.Despesa>0).length||1;
   const avgDespesa       = yearlyData.reduce((s,m)=>s+m.Despesa,0)/monthsWithData;
   const avgReceita       = yearlyData.reduce((s,m)=>s+m.Receita,0)/(yearlyData.filter(m=>m.Receita>0).length||1);
-
-  const dashCatData = useMemo(()=>{
-    const map={};
-    dashFiltered.forEach(t=>{ if(!map[t.category]) map[t.category]={receita:0,despesa:0}; map[t.category][t.type]+=t.amount; });
-    return map;
-  },[dashFiltered]);
 
   const dashBudgetAnalysis = useMemo(()=>{
     return DESPESA_CATS.map(catId=>{
@@ -387,14 +448,6 @@ export default function App() {
   },[transactions,budgets,dashViewMode,dashMonth,selectedYear]);
 
   const mostOverspent = dashBudgetAnalysis.filter(r=>r.over).slice(0,3);
-  const topExpenses   = [...dashBudgetAnalysis].sort((a,b)=>b.spent-a.spent).slice(0,5);
-
-  const pieData = useMemo(()=>
-    DESPESA_CATS.map(catId=>({ name:getCatLabel(catId), value:dashCatData[catId]?.despesa||0 }))
-      .filter(d=>d.value>0).sort((a,b)=>b.value-a.value).slice(0,8),
-    [dashCatData]);
-
-  const savingsRate = dashTotalReceita>0?(dashSaldo/dashTotalReceita)*100:0;
 
   if (session===undefined) return (
     <div style={{minHeight:"100vh",background:"#020817",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -412,19 +465,20 @@ export default function App() {
     </button>
   );
 
-  // ─── Budget bar ────────────────────────────────────────────────────────────
-
   const budgetBarJSX = (row) => {
-    const {cat,budgeted,realSpent,pct,over,diff,isReceita} = row;
-    const barColor = isReceita?(realSpent>=budgeted?"#4ade80":"#3b82f6"):(over?"#f87171":"#4ade80");
+    const {cat,budgeted,realSpent,pct,over,diff,isReceita,hasOverride} = row;
+    const barColor  = isReceita?(realSpent>=budgeted?"#4ade80":"#3b82f6"):(over?"#f87171":"#4ade80");
     const diffColor = isReceita?(diff<=0?"#4ade80":"#f87171"):(over?"#f87171":"#4ade80");
-    const diffText = isReceita
+    const diffText  = isReceita
       ?(diff<=0?`✓ Meta atingida (+${mask(fmt(Math.abs(diff)))})`:`⚠️ Faltam ${mask(fmt(diff))}`)
       :(over?`⚠️ Estourou ${mask(fmt(Math.abs(diff)))}`:`✓ Faltam ${mask(fmt(diff))}`);
     return (
       <div key={cat.id} style={bStyles.row}>
         <div style={bStyles.rowTop}>
-          <span style={bStyles.catName}>{cat.icon} {cat.label}</span>
+          <span style={bStyles.catName}>
+            {cat.icon} {cat.label}
+            {hasOverride && <span style={{fontSize:9,color:"#60a5fa",marginLeft:6,fontWeight:700,verticalAlign:"middle"}}>✏️ específico</span>}
+          </span>
           <div style={bStyles.amounts}>
             <span style={{...bStyles.spent,color:isReceita?(diff<=0?"#4ade80":"#e2e8f0"):(over?"#f87171":"#e2e8f0")}}>{mask(fmt(realSpent))}</span>
             <span style={bStyles.sep}>/</span>
@@ -441,8 +495,8 @@ export default function App() {
     );
   };
 
-  const totalOrcReceita = CATEGORIES.receita.reduce((s,c)=>s+getBudgetAmount(budgets,c.id,selectedYear,selectedMonth),0);
-  const totalOrcDespesa = CATEGORIES.despesa.reduce((s,c)=>s+getBudgetAmount(budgets,c.id,selectedYear,selectedMonth),0);
+  const totalOrcReceita  = CATEGORIES.receita.reduce((s,c)=>s+getBudgetAmount(budgets,c.id,selectedYear,selectedMonth),0);
+  const totalOrcDespesa  = CATEGORIES.despesa.reduce((s,c)=>s+getBudgetAmount(budgets,c.id,selectedYear,selectedMonth),0);
   const budgetRowsReceita = budgetRows.filter(r=>r.isReceita);
   const budgetRowsDespesa = budgetRows.filter(r=>!r.isReceita);
 
@@ -625,33 +679,63 @@ export default function App() {
       </div>
       <div style={S.typeToggle}>
         <button style={{...S.typeBtn,...(budgetScope==="month"?{borderColor:"#d97706",color:"#fbbf24",background:"#1a1000"}:{})}}
-          onClick={()=>setBudgetScope("month")}>📅 Este mês</button>
+          onClick={()=>{
+            setBudgetScope("month");
+            // Ao trocar para mês: mostra valor efetivo do mês
+            const edits={};
+            ALL_CATS.forEach(c=>{
+              const val = getBudgetAmount(budgets,c.id,selectedYear,selectedMonth);
+              edits[c.id] = val>0?String(val):"";
+            });
+            setBudgetEdits(edits);
+          }}>📅 Este mês</button>
         <button style={{...S.typeBtn,...(budgetScope==="base"?{borderColor:"#d97706",color:"#fbbf24",background:"#1a1000"}:{})}}
-          onClick={()=>setBudgetScope("base")}>📋 Base anual</button>
+          onClick={()=>{
+            setBudgetScope("base");
+            // Ao trocar para base anual: mostra apenas o valor base (não o override do mês)
+            const edits={};
+            ALL_CATS.forEach(c=>{
+              const val = getBaseAmount(budgets,c.id,selectedYear);
+              edits[c.id] = val>0?String(val):"";
+            });
+            setBudgetEdits(edits);
+          }}>📋 Base anual</button>
       </div>
       <div style={{fontSize:11,color:"#475569",marginBottom:16,lineHeight:1.5}}>
         {budgetScope==="month"
-          ?`Valores aplicados apenas em ${MONTHS_FULL[selectedMonth]}. Sobrescreve o base anual.`
-          :`Valores padrão para todos os meses de ${selectedYear} sem ajuste específico.`}
+          ?`Valores aplicados apenas em ${MONTHS_FULL[selectedMonth]}. Sobrescreve o base anual sem alterar outros meses.`
+          :`Base padrão para ${selectedYear}. Só altera meses sem orçamento específico ou com valor igual ao base atual.`}
       </div>
       <div style={{...S.sectionTitle,marginBottom:12}}>💚 Receitas</div>
-      {CATEGORIES.receita.map(c=>(
-        <div key={c.id} style={S.field}>
-          <label style={{...S.label,color:"#4ade80"}}>{c.icon} {c.label}</label>
-          <input style={S.input} type="text" inputMode="decimal"
-            placeholder={`Base: ${fmt(DEFAULT_BUDGETS[c.id]||0)}`}
-            value={budgetEdits[c.id]??""} onChange={e=>setBudgetEdits(p=>({...p,[c.id]:e.target.value}))}/>
-        </div>
-      ))}
+      {CATEGORIES.receita.map(c=>{
+        const hasOvr = budgetScope==="month" && hasMonthOverride(budgets,c.id,selectedYear,selectedMonth);
+        return (
+          <div key={c.id} style={S.field}>
+            <label style={{...S.label,color:"#4ade80"}}>
+              {c.icon} {c.label}
+              {hasOvr&&<span style={{fontSize:9,color:"#60a5fa",marginLeft:6,fontWeight:700}}>✏️ específico deste mês</span>}
+            </label>
+            <input style={S.input} type="text" inputMode="decimal"
+              placeholder={`Base: ${fmt(DEFAULT_BUDGETS[c.id]||0)}`}
+              value={budgetEdits[c.id]??""} onChange={e=>setBudgetEdits(p=>({...p,[c.id]:e.target.value}))}/>
+          </div>
+        );
+      })}
       <div style={{...S.sectionTitle,marginBottom:12,marginTop:8}}>❤️ Despesas</div>
-      {CATEGORIES.despesa.map(c=>(
-        <div key={c.id} style={S.field}>
-          <label style={{...S.label,color:"#f87171"}}>{c.icon} {c.label}</label>
-          <input style={S.input} type="text" inputMode="decimal"
-            placeholder={`Base: ${fmt(DEFAULT_BUDGETS[c.id]||0)}`}
-            value={budgetEdits[c.id]??""} onChange={e=>setBudgetEdits(p=>({...p,[c.id]:e.target.value}))}/>
-        </div>
-      ))}
+      {CATEGORIES.despesa.map(c=>{
+        const hasOvr = budgetScope==="month" && hasMonthOverride(budgets,c.id,selectedYear,selectedMonth);
+        return (
+          <div key={c.id} style={S.field}>
+            <label style={{...S.label,color:"#f87171"}}>
+              {c.icon} {c.label}
+              {hasOvr&&<span style={{fontSize:9,color:"#60a5fa",marginLeft:6,fontWeight:700}}>✏️ específico deste mês</span>}
+            </label>
+            <input style={S.input} type="text" inputMode="decimal"
+              placeholder={`Base: ${fmt(DEFAULT_BUDGETS[c.id]||0)}`}
+              value={budgetEdits[c.id]??""} onChange={e=>setBudgetEdits(p=>({...p,[c.id]:e.target.value}))}/>
+          </div>
+        );
+      })}
       <button style={{...S.saveBtn,background:"linear-gradient(135deg,#d97706,#f59e0b)",opacity:syncing?0.6:1}}
         onClick={saveBudgets} disabled={syncing}>
         {syncing?"Salvando...":"Salvar Orçamento"}
@@ -726,11 +810,8 @@ export default function App() {
     </div>
   );
 
-  // ─── Dashboard analítico view ──────────────────────────────────────────────
-
   const analyticsJSX = (
     <div style={{paddingBottom:20}}>
-      {/* Filtros */}
       <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
         <div style={aStyles.toggle}>
           <button style={{...aStyles.toggleBtn,...(dashViewMode==="year"?aStyles.toggleActive:{})}} onClick={()=>setDashViewMode("year")}>Ano {selectedYear}</button>
@@ -742,8 +823,6 @@ export default function App() {
           </select>
         )}
       </div>
-
-      {/* KPIs */}
       <div style={aStyles.kpiRow}>
         <div style={{...aStyles.kpi,borderColor:"#166534"}}>
           <div style={aStyles.kpiLabel}>Receita Total</div>
@@ -760,8 +839,6 @@ export default function App() {
           <div style={{...aStyles.kpiValue,color:dashSaldo>=0?"#60a5fa":"#f87171"}}>{mask(fmtK(dashSaldo))}</div>
         </div>
       </div>
-
-      {/* Alertas */}
       {mostOverspent.length>0&&(
         <div style={aStyles.alertBox}>
           <div style={aStyles.alertTitle}>⚠️ Orçamentos estourados</div>
@@ -775,8 +852,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* Gráficos linha 1 */}
       <div style={aStyles.chartsRow}>
         {dashViewMode==="year"&&(
           <div style={{...aStyles.card,flex:2}}>
@@ -804,8 +879,6 @@ export default function App() {
           </div>
         )}
       </div>
-
-      {/* Gráficos linha 2 — Budget */}
       <div style={aStyles.chartsRow}>
         <div style={{...aStyles.card,flex:1}}>
           <div style={aStyles.cardTitle}>Orçamento × Realizado — Despesas</div>
@@ -813,42 +886,36 @@ export default function App() {
             {dashBudgetAnalysis.map(r=>{
               const barColor = r.over?"#f87171":r.pct>80?"#fbbf24":"#4ade80";
               return (
-              <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                  <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.label}</span>
-                  <div style={{display:"flex",alignItems:"center",gap:4}}>
-                    <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmt(r.spent))}</span>
-                    <span style={{fontSize:11,color:"#334155"}}>/</span>
-                    <span style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{mask(fmt(r.budgeted))}</span>
+                <div key={r.catId} style={{paddingBottom:10,borderBottom:"1px solid #0a1628"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                    <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.label}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:4}}>
+                      <span style={{fontSize:13,fontWeight:800,color:r.over?"#f87171":"#e2e8f0"}}>{mask(fmt(r.spent))}</span>
+                      <span style={{fontSize:11,color:"#334155"}}>/</span>
+                      <span style={{fontSize:11,color:"#e2e8f0",fontWeight:600}}>{mask(fmt(r.budgeted))}</span>
+                    </div>
+                  </div>
+                  {r.budgeted>0&&(
+                    <div style={{height:5,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:3}}>
+                      <div style={{height:"100%",width:`${Math.min(r.pct,100)}%`,borderRadius:99,background:barColor,transition:"width 0.4s"}}/>
+                    </div>
+                  )}
+                  <div style={{fontSize:10,fontWeight:700,color:r.budgeted>0?barColor:"#475569",textAlign:"right"}}>
+                    {r.budgeted>0?(r.over?`⚠️ +${mask(fmt(Math.abs(r.diff)))}`:`✓ ${mask(fmt(r.diff))} restante`):"Sem orçamento"}
                   </div>
                 </div>
-                {r.budgeted>0&&(
-                  <div style={{height:5,background:"#0f172a",borderRadius:99,overflow:"hidden",marginBottom:3}}>
-                    <div style={{height:"100%",width:`${Math.min(r.pct,100)}%`,borderRadius:99,background:barColor,transition:"width 0.4s"}}/>
-                  </div>
-                )}
-                <div style={{fontSize:10,fontWeight:700,color:r.budgeted>0?barColor:"#475569",textAlign:"right"}}>
-                  {r.budgeted>0?(r.over?`⚠️ +${mask(fmt(Math.abs(r.diff)))}`:`✓ ${mask(fmt(r.diff))} restante`):"Sem orçamento"}
-                </div>
-              </div>
               );
             })}
           </div>
         </div>
       </div>
-
-      {/* Evolução Investimentos — abaixo do orçamento */}
       {(()=>{
         const invEvolution = MONTHS.map((m,i)=>{
           const snap = getInvestMonth(i,selectedYear);
           const total = INV_BANKS.reduce((s,b)=>s+(snap[b.id]||0),0);
           const prevSnap = getInvestMonth(i-1,selectedYear);
           const prevTotal = INV_BANKS.reduce((s,b)=>s+(prevSnap[b.id]||0),0);
-          return {
-            name:m, Total:total,
-            Itaú: snap.itau||0, XP: snap.xp||0, Bradesco: snap.bradesco||0,
-            delta: i>0&&prevTotal>0 ? total-prevTotal : null,
-          };
+          return { name:m, Total:total, Itaú:snap.itau||0, XP:snap.xp||0, Bradesco:snap.bradesco||0, delta:i>0&&prevTotal>0?total-prevTotal:null };
         }).filter(m=>m.Total>0);
         if(invEvolution.length===0) return null;
         return (
@@ -887,14 +954,11 @@ export default function App() {
     </div>
   );
 
-  // ─── Render ────────────────────────────────────────────────────────────────
-
   return (
     <div style={S.root}>
       <style>{css}</style>
       {toast&&<div style={{...S.toast,background:toast.ok?"#22c55e":"#ef4444"}}>{toast.msg}</div>}
       {syncing&&<div style={S.syncDot}>☁️</div>}
-
       {isDesktop ? (
         <div style={S.desktopWrapper}>
           <aside style={S.sidebar}>
@@ -1003,22 +1067,22 @@ const bStyles = {
 };
 
 const aStyles = {
-  toggle:     {display:"flex",background:"#0a1628",borderRadius:8,padding:3,gap:3},
-  toggleBtn:  {padding:"6px 14px",borderRadius:6,border:"none",background:"none",color:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"},
+  toggle:      {display:"flex",background:"#0a1628",borderRadius:8,padding:3,gap:3},
+  toggleBtn:   {padding:"6px 14px",borderRadius:6,border:"none",background:"none",color:"#475569",fontWeight:700,fontSize:13,cursor:"pointer"},
   toggleActive:{background:"#0f172a",color:"#e2e8f0"},
-  select:     {background:"#0a1628",border:"1px solid #1e293b",color:"#e2e8f0",borderRadius:8,padding:"6px 12px",fontSize:13,fontWeight:600,cursor:"pointer",outline:"none"},
-  kpiRow:     {display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16},
-  kpi:        {background:"#04091a",border:"1px solid",borderRadius:12,padding:"14px 16px"},
-  kpiLabel:   {fontSize:10,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
-  kpiValue:   {fontSize:22,fontWeight:800,marginBottom:2},
-  kpiSub:     {fontSize:10,color:"#e2e8f0"},
-  alertBox:   {background:"#1c0a0a",border:"1px solid #7f1d1d",borderRadius:10,padding:"12px 14px",marginBottom:14},
-  alertTitle: {fontSize:11,fontWeight:700,color:"#f87171",marginBottom:8,textTransform:"uppercase",letterSpacing:0.8},
-  alertChip:  {background:"#0f172a",border:"1px solid #7f1d1d",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,display:"flex",gap:6,alignItems:"center"},
-  chartsRow:  {display:"flex",gap:12,flexWrap:"wrap",marginBottom:14},
-  card:       {background:"#04091a",border:"1px solid #0f172a",borderRadius:14,padding:"16px",marginBottom:0,flex:1,minWidth:200},
-  cardTitle:  {fontSize:11,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
-  insightCard:{background:"#0a1628",border:"1px solid",borderRadius:10,padding:"12px",display:"flex",gap:8,alignItems:"flex-start"},
+  select:      {background:"#0a1628",border:"1px solid #1e293b",color:"#e2e8f0",borderRadius:8,padding:"6px 12px",fontSize:13,fontWeight:600,cursor:"pointer",outline:"none"},
+  kpiRow:      {display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:16},
+  kpi:         {background:"#04091a",border:"1px solid",borderRadius:12,padding:"14px 16px"},
+  kpiLabel:    {fontSize:10,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:6},
+  kpiValue:    {fontSize:22,fontWeight:800,marginBottom:2},
+  kpiSub:      {fontSize:10,color:"#e2e8f0"},
+  alertBox:    {background:"#1c0a0a",border:"1px solid #7f1d1d",borderRadius:10,padding:"12px 14px",marginBottom:14},
+  alertTitle:  {fontSize:11,fontWeight:700,color:"#f87171",marginBottom:8,textTransform:"uppercase",letterSpacing:0.8},
+  alertChip:   {background:"#0f172a",border:"1px solid #7f1d1d",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:600,display:"flex",gap:6,alignItems:"center"},
+  chartsRow:   {display:"flex",gap:12,flexWrap:"wrap",marginBottom:14},
+  card:        {background:"#04091a",border:"1px solid #0f172a",borderRadius:14,padding:"16px",marginBottom:0,flex:1,minWidth:200},
+  cardTitle:   {fontSize:11,fontWeight:700,color:"#e2e8f0",textTransform:"uppercase",letterSpacing:1,marginBottom:12},
+  insightCard: {background:"#0a1628",border:"1px solid",borderRadius:10,padding:"12px",display:"flex",gap:8,alignItems:"flex-start"},
 };
 
 const shared = {
