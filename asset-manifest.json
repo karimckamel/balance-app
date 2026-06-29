@@ -1,10 +1,10 @@
 {
   "files": {
-    "main.js": "/balance-app/static/js/main.19738c69.js",
+    "main.js": "/balance-app/static/js/main.16c6aede.js",
     "index.html": "/balance-app/index.html",
-    "main.19738c69.js.map": "/balance-app/static/js/main.19738c69.js.map"
+    "main.16c6aede.js.map": "/balance-app/static/js/main.16c6aede.js.map"
   },
   "entrypoints": [
-    "static/js/main.19738c69.js"
+    "static/js/main.16c6aede.js"
   ]
 }
